@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     AI_PROVIDER: str = "groq"
 
     GROQ_API_KEY: Optional[str] = None
-    GROQ_MODEL: str = "llama-3.1-8b-instant"
+    GROQ_MODEL: str = "openai/gpt-oss-20b"
 
     GEMINI_API_KEY: Optional[str] = None
     OPENROUTER_API_KEY: Optional[str] = None

@@ -35,7 +35,7 @@ The backend provides:
 | Auth | JWT (python-jose) + bcrypt (passlib) |
 | OTP | bcrypt-hashed 6-digit codes stored in `otp_sessions` |
 | OCR | Tesseract via pytesseract |
-| AI | Groq (llama-3.1-8b-instant), optional Gemini / OpenRouter |
+| AI | Groq (openai/gpt-oss-20b), optional Gemini / OpenRouter |
 | Rate limiting | slowapi 0.1.9 (in-process, per-IP) |
 | Logging | Loguru |
 | Settings | pydantic-settings |
@@ -528,7 +528,7 @@ CONSENT_ACCESS_DURATION_DAYS=30
 LOG_LEVEL=INFO
 AI_PROVIDER=groq
 GROQ_API_KEY=                       # required if AI_PROVIDER=groq
-GROQ_MODEL=llama-3.1-8b-instant
+GROQ_MODEL=openai/gpt-oss-20b
 GEMINI_API_KEY=                     # optional
 OPENROUTER_API_KEY=                 # optional
 GOOGLE_VISION_API_KEY=              # ⚠ declared as str (required) but not active — see §9
