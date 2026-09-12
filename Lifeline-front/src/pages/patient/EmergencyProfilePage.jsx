@@ -4,7 +4,7 @@ import PatientLayout from "../../layouts/PatientLayout";
 import {
   AlertOctagon, Phone, Pill, Heart, AlertTriangle, ShieldCheck,
   User, Users, CalendarDays, Droplets, ClipboardList, Stethoscope,
-  Loader2, Clock,
+  Loader2, Clock, Pencil, Check, X,
 } from "lucide-react";
 import { getPatientProfile, updatePatientProfile } from "../../api/patientAuth.js";
 import { getRecords } from "../../api/records.js";
@@ -15,6 +15,18 @@ function EmergencyProfilePage() {
   const [profile, setProfile] = useState(null);
   const [allergies, setAllergies] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // ── Emergency Contacts edit state ──────────────────────────────────────────
+  const [editingContacts, setEditingContacts] = useState(false);
+  const [contactsDraft, setContactsDraft] = useState([]);
+  const [contactsError, setContactsError] = useState("");
+  const [savingContacts, setSavingContacts] = useState(false);
+
+  // ── Medical Conditions edit state ──────────────────────────────────────────
+  const [editingConditions, setEditingConditions] = useState(false);
+  const [conditionsDraft, setConditionsDraft] = useState([]);
+  const [conditionsError, setConditionsError] = useState("");
+  const [savingConditions, setSavingConditions] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -33,6 +45,94 @@ function EmergencyProfilePage() {
       .catch(() => {/* stay on empty state */})
       .finally(() => setLoading(false));
   }, [currentUser?.patient_id]);
+
+  // ── Contacts handlers ───────────────────────────────────────────────────────
+  const startEditContacts = () => {
+    setContactsDraft((profile.emergency_contacts || []).map((c) => ({ ...c })));
+    setContactsError("");
+    setEditingContacts(true);
+  };
+
+  const cancelEditContacts = () => {
+    setEditingContacts(false);
+    setContactsError("");
+  };
+
+  const updateContactField = (index, field, value) => {
+    setContactsDraft((prev) => prev.map((c, i) => i === index ? { ...c, [field]: value } : c));
+  };
+
+  const addContact = () => {
+    setContactsDraft((prev) => [...prev, { name: "", relation: "", phone: "" }]);
+  };
+
+  const removeContact = (index) => {
+    setContactsDraft((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const saveContacts = async () => {
+    // Filter rows that are entirely blank
+    const toSave = contactsDraft.filter(
+      (c) => c.name.trim() || c.relation.trim() || c.phone.trim()
+    );
+    // Validate: non-blank rows must have name and phone
+    for (const c of toSave) {
+      if (!c.name.trim() || !c.phone.trim()) {
+        setContactsError("Each contact must have a name and phone number.");
+        return;
+      }
+    }
+    setSavingContacts(true);
+    setContactsError("");
+    try {
+      const updated = await updatePatientProfile({ emergency_contacts: toSave });
+      setProfile(updated);
+      setEditingContacts(false);
+    } catch (err) {
+      setContactsError(err.message || "Save failed. Please try again.");
+    } finally {
+      setSavingContacts(false);
+    }
+  };
+
+  // ── Conditions handlers ─────────────────────────────────────────────────────
+  const startEditConditions = () => {
+    setConditionsDraft((profile.conditions || []).map((c) => c));
+    setConditionsError("");
+    setEditingConditions(true);
+  };
+
+  const cancelEditConditions = () => {
+    setEditingConditions(false);
+    setConditionsError("");
+  };
+
+  const updateCondition = (index, value) => {
+    setConditionsDraft((prev) => prev.map((c, i) => i === index ? value : c));
+  };
+
+  const addCondition = () => {
+    setConditionsDraft((prev) => [...prev, ""]);
+  };
+
+  const removeCondition = (index) => {
+    setConditionsDraft((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const saveConditions = async () => {
+    const toSave = conditionsDraft.filter((c) => c.trim() !== "");
+    setSavingConditions(true);
+    setConditionsError("");
+    try {
+      const updated = await updatePatientProfile({ conditions: toSave });
+      setProfile(updated);
+      setEditingConditions(false);
+    } catch (err) {
+      setConditionsError(err.message || "Save failed. Please try again.");
+    } finally {
+      setSavingConditions(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -112,53 +212,187 @@ function EmergencyProfilePage() {
           )}
         </div>
 
-        {/* Conditions */}
+        {/* ── Medical Conditions ──────────────────────────────────── */}
         <div className="bg-white border rounded-2xl p-6 mb-4 shadow-sm">
-          <h3 className="font-bold text-purple-700 flex items-center gap-2 mb-4">
-            <Heart size={18} /> Medical Conditions
-          </h3>
-          {conditions.length > 0 ? (
-            <div className="space-y-2">
-              {conditions.map((c, i) => (
-                <div key={i} className="flex items-center gap-3 p-3 bg-purple-50 border border-purple-200 rounded-xl">
-                  <div className="w-2 h-2 rounded-full bg-purple-500 shrink-0" />
-                  <span className="text-sm font-medium text-slate-700">{c}</span>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-bold text-purple-700 flex items-center gap-2">
+              <Heart size={18} /> Medical Conditions
+            </h3>
+            {!editingConditions && (
+              <button
+                onClick={startEditConditions}
+                className="flex items-center gap-1.5 text-sm font-semibold text-purple-700 hover:text-purple-900 transition"
+              >
+                <Pencil size={14} /> Edit
+              </button>
+            )}
+          </div>
+
+          {editingConditions ? (
+            <div className="space-y-3">
+              {conditionsError && (
+                <p className="text-sm text-red-600">{conditionsError}</p>
+              )}
+              {conditionsDraft.map((c, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={c}
+                    onChange={(e) => updateCondition(i, e.target.value)}
+                    placeholder="e.g. Type 2 Diabetes"
+                    className="flex-1 border border-slate-300 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                  <button
+                    onClick={() => removeCondition(i)}
+                    className="p-2 text-slate-400 hover:text-red-500 transition"
+                    aria-label="Remove condition"
+                  >
+                    <X size={16} />
+                  </button>
                 </div>
               ))}
+              <button
+                onClick={addCondition}
+                className="text-sm font-semibold text-purple-600 hover:text-purple-800 transition"
+              >
+                + Add condition
+              </button>
+              <div className="flex gap-3 pt-1">
+                <button
+                  onClick={saveConditions}
+                  disabled={savingConditions}
+                  className="flex items-center gap-2 bg-purple-600 text-white px-5 py-2 rounded-xl text-sm font-semibold hover:bg-purple-700 transition disabled:opacity-60"
+                >
+                  {savingConditions ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                  Save
+                </button>
+                <button
+                  onClick={cancelEditConditions}
+                  className="flex items-center gap-2 bg-slate-100 text-slate-700 px-5 py-2 rounded-xl text-sm font-semibold hover:bg-slate-200 transition"
+                >
+                  <X size={14} /> Cancel
+                </button>
+              </div>
             </div>
           ) : (
-            <p className="text-sm text-slate-400">No conditions recorded.</p>
+            conditions.length > 0 ? (
+              <div className="space-y-2">
+                {conditions.map((c, i) => (
+                  <div key={i} className="flex items-center gap-3 p-3 bg-purple-50 border border-purple-200 rounded-xl">
+                    <div className="w-2 h-2 rounded-full bg-purple-500 shrink-0" />
+                    <span className="text-sm font-medium text-slate-700">{c}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400">No conditions recorded.</p>
+            )
           )}
         </div>
 
-        {/* Emergency Contacts */}
+        {/* ── Emergency Contacts ──────────────────────────────────── */}
         <div className="bg-white border rounded-2xl p-6 mb-6 shadow-sm">
-          <h3 className="font-bold text-blue-700 flex items-center gap-2 mb-4">
-            <Phone size={18} /> Emergency Contacts
-          </h3>
-          {emergencyContacts.length > 0 ? (
-            <div className="space-y-3">
-              {emergencyContacts.map((c, i) => (
-                <div key={i} className="flex items-center gap-4 p-4 bg-blue-50 border border-blue-100 rounded-xl">
-                  <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center shrink-0">
-                    <User size={18} className="text-blue-600" />
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-bold text-blue-700 flex items-center gap-2">
+              <Phone size={18} /> Emergency Contacts
+            </h3>
+            {!editingContacts && (
+              <button
+                onClick={startEditContacts}
+                className="flex items-center gap-1.5 text-sm font-semibold text-blue-700 hover:text-blue-900 transition"
+              >
+                <Pencil size={14} /> Edit
+              </button>
+            )}
+          </div>
+
+          {editingContacts ? (
+            <div className="space-y-4">
+              {contactsError && (
+                <p className="text-sm text-red-600">{contactsError}</p>
+              )}
+              {contactsDraft.map((c, i) => (
+                <div key={i} className="flex items-start gap-2 p-3 bg-blue-50 border border-blue-100 rounded-xl">
+                  <div className="flex-1 grid grid-cols-3 gap-2">
+                    <input
+                      type="text"
+                      value={c.name}
+                      onChange={(e) => updateContactField(i, "name", e.target.value)}
+                      placeholder="Name *"
+                      className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <input
+                      type="text"
+                      value={c.relation}
+                      onChange={(e) => updateContactField(i, "relation", e.target.value)}
+                      placeholder="Relation"
+                      className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <input
+                      type="tel"
+                      value={c.phone}
+                      onChange={(e) => updateContactField(i, "phone", e.target.value)}
+                      placeholder="Phone *"
+                      className="border border-slate-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
                   </div>
-                  <div className="flex-1">
-                    <p className="font-semibold text-slate-800">{c.name}</p>
-                    <p className="text-xs text-slate-500">{c.relation}</p>
-                  </div>
-                  <a
-                    href={`tel:${c.phone}`}
-                    className="flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-blue-700 transition"
+                  <button
+                    onClick={() => removeContact(i)}
+                    className="p-2 text-slate-400 hover:text-red-500 transition mt-0.5"
+                    aria-label="Remove contact"
                   >
-                    <Phone size={13} />
-                    {c.phone}
-                  </a>
+                    <X size={16} />
+                  </button>
                 </div>
               ))}
+              <button
+                onClick={addContact}
+                className="text-sm font-semibold text-blue-600 hover:text-blue-800 transition"
+              >
+                + Add contact
+              </button>
+              <div className="flex gap-3 pt-1">
+                <button
+                  onClick={saveContacts}
+                  disabled={savingContacts}
+                  className="flex items-center gap-2 bg-blue-600 text-white px-5 py-2 rounded-xl text-sm font-semibold hover:bg-blue-700 transition disabled:opacity-60"
+                >
+                  {savingContacts ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                  Save
+                </button>
+                <button
+                  onClick={cancelEditContacts}
+                  className="flex items-center gap-2 bg-slate-100 text-slate-700 px-5 py-2 rounded-xl text-sm font-semibold hover:bg-slate-200 transition"
+                >
+                  <X size={14} /> Cancel
+                </button>
+              </div>
             </div>
           ) : (
-            <p className="text-sm text-slate-400">No emergency contacts recorded.</p>
+            emergencyContacts.length > 0 ? (
+              <div className="space-y-3">
+                {emergencyContacts.map((c, i) => (
+                  <div key={i} className="flex items-center gap-4 p-4 bg-blue-50 border border-blue-100 rounded-xl">
+                    <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center shrink-0">
+                      <User size={18} className="text-blue-600" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-semibold text-slate-800">{c.name}</p>
+                      <p className="text-xs text-slate-500">{c.relation}</p>
+                    </div>
+                    <a
+                      href={`tel:${c.phone}`}
+                      className="flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-blue-700 transition"
+                    >
+                      <Phone size={13} />
+                      {c.phone}
+                    </a>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400">No emergency contacts recorded.</p>
+            )
           )}
         </div>
 
