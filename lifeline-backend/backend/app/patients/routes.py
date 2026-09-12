@@ -13,10 +13,6 @@ from app.database.supabase import supabase
 from app.patients import service as patient_service
 from app.patients.schemas import (
     CreatePatientRequest,
-    OtpRequestRequest,
-    OtpRequestResponse,
-    OtpVerifyRequest,
-    OtpVerifyResponse,
     PatientLoginRequest,
     PatientProfileResponse,
     PatientProfileUpdate,
@@ -110,68 +106,13 @@ def get_patient_by_id(
 
 
 # ──────────────────────────────────────────────
-# Router 2: /patient — public OTP flow
+# Router 2: /patient — registration / login / profile
 # ──────────────────────────────────────────────
 
 patient_otp_router = APIRouter(
     prefix="/patient",
     tags=["Patient Authentication"],
 )
-
-
-@patient_otp_router.post("/request-otp", response_model=OtpRequestResponse)
-@limiter.limit("5/minute")
-def request_otp(request: Request, body: OtpRequestRequest):
-    """Request an OTP for patient login.
-
-    No authentication required — the patient identifies themselves by code.
-    Returns the OTP plaintext in the response (demo mode; production → SMS).
-    Returns 404 if the patient_code is not recognised.
-    """
-    patient = patient_service.get_patient_by_code(body.patient_code)
-    if patient is None:
-        raise HTTPException(status_code=404, detail="Patient not found")
-
-    otp = patient_service.create_otp_session(patient["id"])
-
-    return OtpRequestResponse(
-        patient_code=body.patient_code,
-        otp=otp,
-        expires_in_minutes=settings.PATIENT_JWT_EXPIRE_MINUTES,
-    )
-
-
-@patient_otp_router.post("/verify-otp", response_model=OtpVerifyResponse)
-@limiter.limit("10/minute")
-def verify_otp(request: Request, body: OtpVerifyRequest):
-    """Verify an OTP and issue a short-lived patient session JWT.
-
-    No authentication required.
-    Returns 401 if the OTP is invalid or expired.
-    The issued JWT contains: patient_id (UUID), role='patient', sub=patient_code.
-    Expires in PATIENT_JWT_EXPIRE_MINUTES (default 15 min).
-    """
-    patient = patient_service.verify_otp(body.patient_code, body.otp)
-    if patient is None:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or expired OTP",
-        )
-
-    token = create_access_token(
-        data={
-            "sub": patient["patient_code"],
-            "patient_id": patient["id"],
-            "role": "patient",
-        },
-        expire_minutes=settings.PATIENT_JWT_EXPIRE_MINUTES,
-    )
-
-    return OtpVerifyResponse(
-        access_token=token,
-        token_type="bearer",
-        expires_in_minutes=settings.PATIENT_JWT_EXPIRE_MINUTES,
-    )
 
 
 @patient_otp_router.post("/register", response_model=PatientRegisterResponse, status_code=201)

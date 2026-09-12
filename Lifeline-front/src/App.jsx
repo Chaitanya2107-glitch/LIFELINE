@@ -33,8 +33,6 @@ import PatientAccessRequestsPage from "./pages/patient/PatientAccessRequestsPage
 import PatientNotificationsPage from "./pages/patient/PatientNotificationsPage";
 import PatientGuidePage from "./pages/patient/PatientGuidePage";
 import PatientProfilePage from "./pages/patient/PatientProfilePage";
-import PatientOTPPage from "./pages/patient/PatientOTPPage";
-
 // Patient Portal — Health Intelligence
 import HealthJourneyPage from "./pages/patient/HealthJourneyPage";
 import VitalisPage from "./pages/patient/VitalisPage";
@@ -103,7 +101,6 @@ function AppRoutes() {
         {patientRoute("/patient/notifications", PatientNotificationsPage)}
         {patientRoute("/patient/guide", PatientGuidePage)}
         {patientRoute("/patient/profile", PatientProfilePage)}
-        {patientRoute("/patient/otp", PatientOTPPage)}
 
         {/* Health Intelligence */}
         {patientRoute("/patient/journey", HealthJourneyPage)}

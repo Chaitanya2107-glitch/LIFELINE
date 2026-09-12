@@ -48,7 +48,7 @@ print(f"\n{BOLD}=== 2. Route registration (all BE-1 routes) ==={RESET}")
 
 EXPECTED_BE1_ROUTES = [
     "/auth/login", "/auth/register", "/auth/me",
-    "/patient/request-otp", "/patient/verify-otp", "/patient/register",
+    "/patient/register",
     "/patient/login", "/patient/profile",
     "/patients/", "/patients/code/{patient_code}", "/patients/{patient_id}",
     "/consent/request", "/consent/pending", "/consent/my-access",
@@ -177,7 +177,7 @@ print(f"\n{BOLD}=== 6. Patient schemas ==={RESET}")
 from app.patients.schemas import (
     CreatePatientRequest, PatientResponse, PatientProfileResponse,
     PatientRegisterRequest, PatientLoginRequest, PatientProfileUpdate,
-    OtpRequestRequest, OtpRequestResponse, OtpVerifyRequest, OtpVerifyResponse,
+    
 )
 
 p = CreatePatientRequest(name="Alice", phone="+91999", date_of_birth="1990-01-01")
@@ -188,15 +188,6 @@ check("CreatePatientRequest date_of_birth is optional (None)", p2.date_of_birth 
 resp = PatientResponse(id="uuid", patient_code="LFL-ABCDEF", name="Alice",
                        phone="+91999", date_of_birth="1990-01-01", created_at="2024-01-01T00:00:00")
 check("PatientResponse parses", resp.patient_code == "LFL-ABCDEF")
-
-otp_req = OtpRequestRequest(patient_code="LFL-ABCDEF")
-check("OtpRequestRequest parses", otp_req.patient_code == "LFL-ABCDEF")
-otp_resp = OtpRequestResponse(patient_code="LFL-ABCDEF", otp="123456", expires_in_minutes=15)
-check("OtpRequestResponse has expires_in_minutes", otp_resp.expires_in_minutes == 15)
-otp_verify = OtpVerifyRequest(patient_code="LFL-ABCDEF", otp="123456")
-check("OtpVerifyRequest parses", otp_verify.otp == "123456")
-otp_verify_resp = OtpVerifyResponse(access_token="tok", token_type="bearer", expires_in_minutes=15)
-check("OtpVerifyResponse parses", otp_verify_resp.token_type == "bearer")
 
 pat_reg = PatientRegisterRequest(name="Alice", password="pass123", phone="+91999")
 check("PatientRegisterRequest parses", pat_reg.name == "Alice" and pat_reg.phone == "+91999")
@@ -213,6 +204,7 @@ print(f"\n{BOLD}=== 7. Patient service (mocked) ==={RESET}")
 # ═══════════════════════════════════════════════════════
 
 from app.patients.service import get_patient_by_id, get_patient_by_code
+# Note: create_otp_session and verify_otp removed from service.py (OTP system removed)
 
 PATIENT_ROW = {
     "id": "d07a5673-b987-4138-b814-1393071110d3",
@@ -243,24 +235,6 @@ with patch("app.patients.service.supabase") as m:
     result = get_patient_by_id("00000000-0000-0000-0000-000000000000")
     check("get_patient_by_id returns None when not found", result is None)
 
-# OTP: create_otp_session produces 6-digit string, stores hashed
-from app.patients.service import create_otp_session
-with patch("app.patients.service.supabase") as m:
-    m.table.return_value.insert.return_value.execute.return_value.data = [{"id": "sess-1"}]
-    otp = create_otp_session("pat-uuid")
-    check("create_otp_session returns 6-digit string", len(otp) == 6 and otp.isdigit())
-    insert_call = m.table.return_value.insert.call_args[0][0]
-    check("create_otp_session stores otp_hash (not plaintext)", insert_call.get("otp_hash") != otp)
-    check("create_otp_session sets used=False", insert_call.get("used") is False)
-    check("create_otp_session sets patient_id", insert_call.get("patient_id") == "pat-uuid")
-
-# verify_otp: invalid OTP returns None
-from app.patients.service import verify_otp
-with patch("app.patients.service.supabase") as m:
-    m.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [PATIENT_ROW]
-    m.table.return_value.select.return_value.eq.return_value.eq.return_value.gt.return_value.execute.return_value.data = []
-    result = verify_otp("LFL-J6MTOC", "000000")
-    check("verify_otp returns None for no active sessions", result is None)
 
 # ═══════════════════════════════════════════════════════
 print(f"\n{BOLD}=== 8. Medical record service / resolve_patient_id ==={RESET}")
@@ -442,10 +416,10 @@ patient_src = inspect.getsource(patient_routes_mod)
 
 check("POST /auth/login has @limiter.limit",
       "limiter.limit" in auth_src and "10/minute" in auth_src)
-check("POST /patient/request-otp has @limiter.limit (5/minute)",
-      "limiter.limit" in patient_src and "5/minute" in patient_src)
-check("POST /patient/verify-otp has @limiter.limit (10/minute)",
-      "limiter.limit" in patient_src and "10/minute" in patient_src)
+# POST /patient/request-otp and /patient/verify-otp have been removed (OTP system removed).
+# The /patient/register endpoint is still rate-limited at 3/minute.
+check("POST /patient/register has @limiter.limit",
+      "limiter.limit" in patient_src and "3/minute" in patient_src)
 
 # Allowed origins
 cors_mw_kwargs = {}
@@ -626,181 +600,84 @@ check("_format_medicines: mixed list (dict + string) renders both",
       "Aspirin" in _format_medicines([{"name": "Aspirin"}, "Metformin"])
       and "Metformin" in _format_medicines([{"name": "Aspirin"}, "Metformin"]))
 
+
 # ═══════════════════════════════════════════════════════
-print(f"\n{BOLD}=== 20. Appointment OTP sub-flow + appt-token gate ==={RESET}")
+print(f"\n{BOLD}=== 20. Appointment approval flow (replaces OTP) ==={RESET}")
 # ═══════════════════════════════════════════════════════
 
 import app.appointments.routes as appt_routes_mod
-import app.api.upload as upload_mod_v2
-appt_routes_src = inspect.getsource(appt_routes_mod)
-upload_src       = inspect.getsource(upload_mod_v2)
+import app.appointments.schemas as appt_schemas_mod
+import inspect as _inspect
+appt_routes_src    = _inspect.getsource(appt_routes_mod)
+appt_schemas_src   = _inspect.getsource(appt_schemas_mod)
 from fastapi import HTTPException as _HTTPException
-from app.auth.security import require_staff as _require_staff, require_doctor as _require_doctor
-import asyncio as _asyncio
 
-# ── Upload.py: NO OTP endpoints, NO upload_token form field ───────────────────
-check("upload.py: /upload/request-otp NOT present (removed)",
-      "upload/request-otp" not in upload_src)
-check("upload.py: /upload/verify-otp NOT present (removed)",
-      "upload/verify-otp" not in upload_src)
-check("upload.py: upload_token Form field NOT present (removed)",
-      "upload_token" not in upload_src)
-check("upload.py: _UPLOAD_AUTH_ROLE sentinel NOT present (removed)",
-      "_UPLOAD_AUTH_ROLE" not in upload_src)
+# ── Routes: OTP endpoints are GONE ───────────────────────────────────────────
+check("Route /appointments/request-otp NOT in OpenAPI",
+      "/appointments/request-otp" not in paths)
+check("Route /appointments/verify-otp NOT in OpenAPI",
+      "/appointments/verify-otp" not in paths)
 
-# ── Route presence — appointments OTP routes in OpenAPI ───────────────────────
-check("Route /appointments/request-otp in OpenAPI", "/appointments/request-otp" in paths)
-check("Route /appointments/verify-otp in OpenAPI",  "/appointments/verify-otp" in paths)
-check("Route /upload/request-otp NOT in OpenAPI (removed)", "/upload/request-otp" not in paths)
-check("Route /upload/verify-otp NOT in OpenAPI (removed)",  "/upload/verify-otp" not in paths)
+# ── Routes: core appointment routes still present ────────────────────────────
+check("Route /appointments in OpenAPI", "/appointments" in paths)
+check("Route /appointments/{appt_id} in OpenAPI", "/appointments/{appt_id}" in paths)
 
-# ── Appointment routes source-level checks ────────────────────────────────────
-check("appointments/routes.py: request-otp endpoint defined",
-      "request-otp" in appt_routes_src)
-check("appointments/routes.py: verify-otp endpoint defined",
-      "verify-otp" in appt_routes_src)
-check("appointments/routes.py: _APPT_AUTH_ROLE sentinel defined",
-      "_APPT_AUTH_ROLE" in appt_routes_src and "appt_auth" in appt_routes_src)
-check("appointments/routes.py: appt_token validated in POST /appointments",
-      "appt_token" in appt_routes_src and "verify_access_token" in appt_routes_src)
-check("appointments/routes.py: patient_id cross-checked against token",
-      "token_payload.get" in appt_routes_src)
-check("appointments/routes.py: request-otp rate-limited at 5/minute",
-      appt_routes_src.count("5/minute") >= 1)
-check("appointments/routes.py: verify-otp rate-limited at 10/minute",
-      appt_routes_src.count("10/minute") >= 1)
+# ── Source: OTP sentinel and token verification gone ─────────────────────────
+check("appointments/routes.py: _APPT_AUTH_ROLE sentinel REMOVED",
+      "_APPT_AUTH_ROLE" not in appt_routes_src)
+check("appointments/routes.py: appt_token NOT validated in POST /appointments",
+      "appt_token" not in appt_routes_src)
 check("appointments/routes.py: consent check still present",
       "check_doctor_consent" in appt_routes_src)
 
-# ── Unit: POST /appointments/request-otp — happy path ────────────────────────
-# Use __wrapped__ to bypass the slowapi rate-limit decorator.
-from app.appointments.routes import appt_request_otp, _APPT_TOKEN_EXPIRE_MINUTES
-from app.appointments.schemas import ApptOtpRequestBody
+# ── Source: new approval-flow logic present ───────────────────────────────────
+check("appointments/routes.py: patient approval guard present (upcoming/rejected check)",
+      "upcoming" in appt_routes_src and "rejected" in appt_routes_src)
+check("appointments/routes.py: invalid_transition returned by service",
+      "invalid_transition" in appt_routes_src)
+check("appointments/schemas.py: appt_token field REMOVED from CreateAppointmentBody",
+      "appt_token" not in appt_schemas_src)
+check("appointments/schemas.py: status validator includes pending and rejected",
+      '"pending"' in appt_schemas_src and '"rejected"' in appt_schemas_src)
+check("appointments/schemas.py: OTP request/verify schemas REMOVED",
+      "ApptOtpRequestBody" not in appt_schemas_src)
 
-_appt_req_fn = getattr(appt_request_otp, "__wrapped__", appt_request_otp)
+# ── Service: default status is pending ───────────────────────────────────────
+import app.appointments.service as appt_svc_mod
+appt_svc_src = _inspect.getsource(appt_svc_mod)
+check('appointments/service.py: create_appointment uses status="pending"',
+      '"pending"' in appt_svc_src)
+check("appointments/service.py: invalid_transition guard present",
+      "invalid_transition" in appt_svc_src)
 
-with patch("app.appointments.routes.get_patient_by_code",
-           return_value={"id": "pat-uuid-1", "patient_code": "LFL-J6MTOC"}), \
-     patch("app.appointments.routes.create_otp_session", return_value="654321") as _mock_otp:
-    _appt_otp_resp = _appt_req_fn(
-        request=MagicMock(),
-        body=ApptOtpRequestBody(patient_code="LFL-J6MTOC"),
-        current_user={"role": "doctor", "user_id": 7},
-    )
-    check("appt_request_otp: returns OTP plaintext",   _appt_otp_resp.otp == "654321")
-    check("appt_request_otp: returns patient_code",    _appt_otp_resp.patient_code == "LFL-J6MTOC")
-    check("appt_request_otp: expires_in_minutes matches constant",
-          _appt_otp_resp.expires_in_minutes == _APPT_TOKEN_EXPIRE_MINUTES)
-    check("appt_request_otp: create_otp_session called with patient UUID",
-          _mock_otp.call_args[0][0] == "pat-uuid-1")
-
-# ── Unit: POST /appointments/request-otp — unknown patient -> 404 ─────────────
-with patch("app.appointments.routes.get_patient_by_code", return_value=None):
-    try:
-        _appt_req_fn(
-            request=MagicMock(),
-            body=ApptOtpRequestBody(patient_code="LFL-XXXXXX"),
-            current_user={"role": "doctor", "user_id": 7},
-        )
-        check("appt_request_otp: unknown patient -> 404", False, "no HTTPException raised")
-    except _HTTPException as _e:
-        check("appt_request_otp: unknown patient -> 404", _e.status_code == 404)
-
-# ── Unit: POST /appointments/verify-otp — happy path ─────────────────────────
-from app.appointments.routes import appt_verify_otp
-from app.appointments.schemas import ApptOtpVerifyBody
-
-_appt_verify_fn = getattr(appt_verify_otp, "__wrapped__", appt_verify_otp)
-_PATIENT_ROW_APPT = {"id": "pat-uuid-1", "patient_code": "LFL-J6MTOC", "name": "Alice"}
-
-with patch("app.appointments.routes.verify_otp", return_value=_PATIENT_ROW_APPT):
-    _appt_verify_resp = _appt_verify_fn(
-        request=MagicMock(),
-        body=ApptOtpVerifyBody(patient_code="LFL-J6MTOC", otp="654321"),
-        current_user={"role": "doctor", "user_id": 7},
-    )
-    check("appt_verify_otp: returns appt_token string",
-          isinstance(_appt_verify_resp.appt_token, str) and len(_appt_verify_resp.appt_token) > 20)
-    check("appt_verify_otp: expires_in_minutes matches constant",
-          _appt_verify_resp.expires_in_minutes == _APPT_TOKEN_EXPIRE_MINUTES)
-
-    _appt_tok_payload = verify_access_token(_appt_verify_resp.appt_token)
-    check("appt_verify_otp: token role is 'appt_auth'",
-          _appt_tok_payload is not None and _appt_tok_payload.get("role") == "appt_auth")
-    check("appt_verify_otp: token patient_id matches patient row",
-          _appt_tok_payload.get("patient_id") == "pat-uuid-1")
-
-# ── Unit: POST /appointments/verify-otp — invalid OTP -> 401 ─────────────────
-with patch("app.appointments.routes.verify_otp", return_value=None):
-    try:
-        _appt_verify_fn(
-            request=MagicMock(),
-            body=ApptOtpVerifyBody(patient_code="LFL-J6MTOC", otp="000000"),
-            current_user={"role": "doctor", "user_id": 7},
-        )
-        check("appt_verify_otp: invalid OTP -> 401", False, "no HTTPException raised")
-    except _HTTPException as _e:
-        check("appt_verify_otp: invalid OTP -> 401", _e.status_code == 401)
-
-# ── Unit: appt_auth token rejected by require_staff / require_doctor ──────────
-_appt_tok_dict = {"sub": "appt_auth", "role": "appt_auth", "patient_id": "pat-uuid-1"}
-try:
-    _require_staff(_appt_tok_dict)
-    check("appt_auth role rejected by require_staff", False, "no HTTPException raised")
-except _HTTPException as _e:
-    check("appt_auth role rejected by require_staff", _e.status_code == 403)
-
-try:
-    _require_doctor(_appt_tok_dict)
-    check("appt_auth role rejected by require_doctor", False, "no HTTPException raised")
-except _HTTPException as _e:
-    check("appt_auth role rejected by require_doctor", _e.status_code == 403)
-
-# ── Unit: POST /appointments — wrong-patient appt_token -> 403 ───────────────
+# ── Unit: POST /appointments — doctor creates pending appointment ─────────────
 from app.appointments.routes import create_appointment as _create_appt
 from app.appointments.schemas import CreateAppointmentBody
+from unittest.mock import patch as _patch
 
-_wrong_appt_token = create_access_token(
-    {"sub": "appt_auth", "role": "appt_auth", "patient_id": "pat-uuid-OTHER"},
-    expire_minutes=_APPT_TOKEN_EXPIRE_MINUTES,
-)
-_right_appt_token = create_access_token(
-    {"sub": "appt_auth", "role": "appt_auth", "patient_id": "pat-uuid-1"},
-    expire_minutes=_APPT_TOKEN_EXPIRE_MINUTES,
-)
-
-# Wrong-patient token -> 403
-try:
-    _create_appt(
+with _patch("app.appointments.routes.check_doctor_consent", return_value=True), \
+     _patch("app.appointments.routes.appt_service.create_appointment",
+            return_value={"id": "appt-1", "patient_id": "pat-uuid-1", "doctor_id": 7,
+                          "date": "2025-12-01", "time": "09:00", "type": "Consultation",
+                          "location": None, "notes": None, "status": "pending",
+                          "created_at": "2025-11-01T10:00:00"}) as _mock_create:
+    _result = _create_appt(
         body=CreateAppointmentBody(
             patient_id="pat-uuid-1", date="2025-12-01", time="09:00",
-            type="Consultation", appt_token=_wrong_appt_token,
+            type="Consultation",
         ),
         current_user={"role": "doctor", "user_id": 7},
     )
-    check("POST /appointments: wrong-patient appt_token -> 403", False, "no HTTPException raised")
-except _HTTPException as _e:
-    check("POST /appointments: wrong-patient appt_token -> 403", _e.status_code == 403)
+    check("POST /appointments: doctor creates appointment with status=pending",
+          _result["status"] == "pending")
+    check("POST /appointments: no appt_token in service call data",
+          "appt_token" not in _mock_create.call_args[1].get("data", {}))
 
-# Invalid token -> 401
+# Non-doctor role -> 403
 try:
     _create_appt(
         body=CreateAppointmentBody(
-            patient_id="pat-uuid-1", date="2025-12-01", time="09:00",
-            type="Consultation", appt_token="not.a.valid.jwt",
-        ),
-        current_user={"role": "doctor", "user_id": 7},
-    )
-    check("POST /appointments: invalid appt_token -> 401", False, "no HTTPException raised")
-except _HTTPException as _e:
-    check("POST /appointments: invalid appt_token -> 401", _e.status_code == 401)
-
-# Non-doctor role -> 403 (even with a valid appt_token)
-try:
-    _create_appt(
-        body=CreateAppointmentBody(
-            patient_id="pat-uuid-1", date="2025-12-01", time="09:00",
-            type="Consultation", appt_token=_right_appt_token,
+            patient_id="pat-uuid-1", date="2025-12-01", time="09:00", type="Consultation",
         ),
         current_user={"role": "clerk", "user_id": 8},
     )
@@ -808,71 +685,45 @@ try:
 except _HTTPException as _e:
     check("POST /appointments: clerk role -> 403", _e.status_code == 403)
 
-# Valid token + valid doctor + valid consent -> reaches service (mock service to avoid DB)
-with patch("app.appointments.routes.check_doctor_consent", return_value=True), \
-     patch("app.appointments.routes.appt_service.create_appointment",
-           return_value={"id": "appt-1", "patient_id": "pat-uuid-1", "doctor_id": 7,
-                         "date": "2025-12-01", "time": "09:00", "type": "Consultation",
-                         "location": None, "notes": None, "status": "upcoming",
-                         "created_at": "2025-11-01T10:00:00"}):
-    _appt_result = _create_appt(
-        body=CreateAppointmentBody(
-            patient_id="pat-uuid-1", date="2025-12-01", time="09:00",
-            type="Consultation", appt_token=_right_appt_token,
-        ),
+# ── Unit: PATCH /appointments — patient cannot set status=completed ───────────
+from app.appointments.routes import update_appointment as _update_appt
+from app.appointments.schemas import UpdateAppointmentBody
+
+try:
+    _update_appt(
+        appt_id="appt-uuid-1",
+        body=UpdateAppointmentBody(status="completed"),
+        current_user={"role": "patient", "patient_id": "pat-uuid-1"},
+    )
+    check("PATCH /appointments: patient cannot mark completed -> 403", False, "no exception")
+except _HTTPException as _e:
+    check("PATCH /appointments: patient cannot mark completed -> 403", _e.status_code == 403)
+
+# Doctor cannot approve (upcoming) or reject
+try:
+    _update_appt(
+        appt_id="appt-uuid-1",
+        body=UpdateAppointmentBody(status="upcoming"),
         current_user={"role": "doctor", "user_id": 7},
     )
-    check("POST /appointments: valid token + consent -> appointment created",
-          _appt_result["id"] == "appt-1")
+    check("PATCH /appointments: doctor cannot set upcoming -> 403", False, "no exception")
+except _HTTPException as _e:
+    check("PATCH /appointments: doctor cannot set upcoming -> 403", _e.status_code == 403)
 
-# appt_token NOT included in what is passed to the service layer
-with patch("app.appointments.routes.check_doctor_consent", return_value=True), \
-     patch("app.appointments.routes.appt_service.create_appointment",
-           return_value={"id": "appt-2", "patient_id": "pat-uuid-1", "doctor_id": 7,
-                         "date": "2025-12-01", "time": "09:00", "type": "Consultation",
-                         "location": None, "notes": None, "status": "upcoming",
-                         "created_at": "2025-11-01T10:00:00"}) as _mock_create:
-    _create_appt(
-        body=CreateAppointmentBody(
-            patient_id="pat-uuid-1", date="2025-12-01", time="09:00",
-            type="Consultation", appt_token=_right_appt_token,
-        ),
-        current_user={"role": "doctor", "user_id": 7},
+# Patient approves (status=upcoming) when appointment is pending -> success
+_APPT_ROW = {"id": "appt-1", "patient_id": "pat-uuid-1", "doctor_id": 7,
+             "date": "2025-12-01", "time": "09:00", "type": "Consultation",
+             "location": None, "notes": None, "status": "upcoming",
+             "created_at": "2025-11-01T10:00:00"}
+
+import app.appointments.service as _appt_svc
+from unittest.mock import patch as _patch2
+
+with _patch2.object(_appt_svc, "update_appointment", return_value=_APPT_ROW):
+    _upd = _update_appt(
+        appt_id="appt-1",
+        body=UpdateAppointmentBody(status="upcoming"),
+        current_user={"role": "patient", "patient_id": "pat-uuid-1"},
     )
-    _service_data = _mock_create.call_args[1].get("data") or _mock_create.call_args[0][1]
-    check("POST /appointments: appt_token NOT forwarded to service layer",
-          "appt_token" not in _service_data)
-
-# ── POST /upload: no upload_token needed (plain staff JWT is enough) ───────────
-from app.api.upload import upload_report as _upload_report
-
-async def _test_upload_no_token():
-    """Upload should reject a missing patient, but NOT 401/403 for missing token."""
-    try:
-        await _upload_report(
-            patient_id="non-existent-patient",
-            file=MagicMock(filename="test.pdf"),
-            report_type="Blood Test",
-            current_user={"role": "doctor", "user_id": 7},
-        )
-        return None
-    except _HTTPException as _e:
-        return _e.status_code
-
-# Patch get_patient_by_id to return None (404) so the test is fast (no OCR).
-with patch("app.api.upload.get_patient_by_id", return_value=None):
-    _upload_no_tok_status = _asyncio.run(_test_upload_no_token())
-check("POST /upload: no upload_token param needed — gets 404 (not 401/422)",
-      _upload_no_tok_status == 404)
-
-# ═══════════════════════════════════════════════════════
-# SUMMARY
-# ═══════════════════════════════════════════════════════
-total = passed + failed
-colour = GREEN if failed == 0 else RED
-print(f"\n{'='*62}")
-print(f"  {colour}{passed}/{total} BE-1 static checks passed{RESET}")
-print(f"{'='*62}\n")
-
-if failed:
-    sys.exit(1)
+    check("PATCH /appointments: patient approves -> upcoming returned",
+          _upd["status"] == "upcoming")

@@ -1,5 +1,5 @@
 import PatientLayout from "../../layouts/PatientLayout";
-import { BookOpen, ShieldCheck, Smartphone, HelpCircle, Lock, ClipboardList } from "lucide-react";
+import { BookOpen, ShieldCheck, HelpCircle, Lock, ClipboardList, CalendarDays } from "lucide-react";
 
 const sections = [
   {
@@ -8,23 +8,10 @@ const sections = [
     title: "How to Log In",
     content: [
       "Go to the Patient Portal at /patient/login.",
-      "Enter your unique Patient ID (format: PT-XXXXXX). This was provided by your doctor or the hospital.",
+      "Enter your unique Lifeline Code (format: LFL-XXXXXX). This was provided by your doctor or the hospital.",
       "Enter your password.",
       "Click 'Sign In to Patient Portal'.",
       "If your credentials are correct, you will be taken to your Patient Dashboard.",
-    ],
-  },
-  {
-    icon: Smartphone,
-    color: "text-green-600 bg-green-100",
-    title: "How OTP Verification Works",
-    content: [
-      "When you try to view a medical report, the system asks you to verify your identity using a One-Time Password (OTP).",
-      "Click 'Send OTP'. An OTP is generated and sent to your registered phone number or email.",
-      "Enter the 6-digit OTP within 12 minutes.",
-      "If correct, you can view the report. The OTP becomes invalid immediately after use.",
-      "You have a maximum of 3 attempts per OTP. If you exceed this, you'll need to request a new one.",
-      "In this demo/prototype, the OTP is shown on screen since it's not connected to a real SMS/email service.",
     ],
   },
   {
@@ -34,9 +21,18 @@ const sections = [
     content: [
       "From your dashboard or the 'My Reports' page, you can see all reports uploaded by your doctors.",
       "Reports are marked as 'Verified' because they were uploaded by authenticated medical personnel.",
-      "To view the contents of a report, click 'Verify & View (OTP)'. You'll be asked to complete OTP verification first.",
-      "Once verified, the report summary becomes visible.",
-      "This OTP step protects you — even if someone else is on your device, they cannot view your reports without your OTP.",
+      "Click 'View Report' to open and read the full details of any report.",
+    ],
+  },
+  {
+    icon: CalendarDays,
+    color: "text-green-600 bg-green-100",
+    title: "How Appointment Approval Works",
+    content: [
+      "When a doctor schedules an appointment for you, it appears in your Appointments page with a 'Pending' status.",
+      "You can Approve the appointment (it becomes 'Upcoming') or Decline it.",
+      "The appointment is only confirmed once you approve it — the doctor cannot confirm it on your behalf.",
+      "You can also cancel any upcoming appointment from the same page.",
     ],
   },
   {
@@ -69,11 +65,10 @@ const sections = [
     color: "text-slate-600 bg-slate-100",
     title: "What to Do If Something Goes Wrong",
     content: [
-      "OTP expired: Click 'Resend OTP' on the verification screen to generate a new one.",
       "Forgot password: Contact your hospital or clinic to reset your Lifeline account.",
       "Unauthorized access: If you suspect someone else is accessing your account, contact your healthcare provider immediately.",
       "Session expired: If the system logs you out automatically after inactivity, simply log in again. This is a security feature, not an error.",
-      "Report missing: If you expect a report that is not showing, ask your doctor to confirm they uploaded it to your correct Patient ID.",
+      "Report missing: If you expect a report that is not showing, ask your doctor to confirm they uploaded it to your correct Lifeline code.",
     ],
   },
   {
@@ -81,10 +76,9 @@ const sections = [
     color: "text-teal-600 bg-teal-100",
     title: "Privacy and Security Tips",
     content: [
-      "Never share your Patient ID or password with anyone, including people claiming to be hospital staff.",
+      "Never share your Lifeline code or password with anyone, including people claiming to be hospital staff.",
       "Always log out of the portal when using a shared or public computer.",
       "The system will automatically log you out after 15 minutes of inactivity.",
-      "Your OTP should never be shared. Legitimate hospital staff will never ask for your OTP.",
       "If you notice unfamiliar reports in your account, report it to your healthcare provider.",
     ],
   },

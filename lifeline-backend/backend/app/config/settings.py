@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 60
-    # Short-lived token issued to patients after OTP verification (Step 3+)
+    # Short-lived patient JWT expiry — used when re-login is forced after inactivity
     PATIENT_JWT_EXPIRE_MINUTES: int = 15
     # How many days an approved consent grant remains valid (Step 5+)
     CONSENT_ACCESS_DURATION_DAYS: int = 7

@@ -1,13 +1,13 @@
 /**
  * src/api/appointments.js
- * Appointments API calls — doctor side.
+ * Appointments API calls — doctor and patient sides.
  */
 
 import { api } from "./client.js";
 
 /**
  * GET /appointments
- * Returns appointments for the authenticated doctor.
+ * Returns appointments for the authenticated user (doctor or patient).
  * @returns {object[]} array of appointment objects
  */
 export function getAppointments() {
@@ -15,34 +15,11 @@ export function getAppointments() {
 }
 
 /**
- * POST /appointments/request-otp
- * Initiate patient OTP authorisation for a pending appointment.
- * Returns the OTP in the response body (demo mode).
- * @param {string} patientCode  - LFL code e.g. "LFL-J6MTOC"
- * @returns {{ patient_code, otp, expires_in_minutes }}
- */
-export function requestApptOtp(patientCode) {
-  return api.post("/appointments/request-otp", { patient_code: patientCode });
-}
-
-/**
- * POST /appointments/verify-otp
- * Verify the patient-provided OTP and obtain a scoped appt-auth token.
- * The returned appt_token must be passed to createAppointment() and is held
- * only in React component state — never stored in localStorage or cookies.
- * @param {string} patientCode
- * @param {string} otp
- * @returns {{ appt_token: string, expires_in_minutes: number }}
- */
-export function verifyApptOtp(patientCode, otp) {
-  return api.post("/appointments/verify-otp", { patient_code: patientCode, otp });
-}
-
-/**
  * POST /appointments
- * Doctor creates an appointment for a patient (requires consent + OTP token).
- * @param {object} data  - { patient_id, date, time, type, location?, notes?, appt_token }
- * @returns {object} created appointment
+ * Doctor creates a pending appointment for a patient (requires consent).
+ * The appointment is created with status='pending' — the patient must approve it.
+ * @param {object} data  - { patient_id, date, time, type, location?, notes? }
+ * @returns {object} created appointment (status='pending')
  */
 export function createAppointment(data) {
   return api.post("/appointments", data);
@@ -51,12 +28,35 @@ export function createAppointment(data) {
 /**
  * PATCH /appointments/{id}
  * Update status, notes, or location of an appointment.
+ *
+ * Doctor may set: 'completed', 'cancelled'
+ * Patient may set: 'upcoming' (approve), 'rejected', 'cancelled'
+ *
  * @param {string} id    - appointment UUID
  * @param {object} data  - { status?, notes?, location? }
  * @returns {object} updated appointment
  */
 export function updateAppointment(id, data) {
   return api.patch(`/appointments/${encodeURIComponent(id)}`, data);
+}
+
+/**
+ * Patient approves a pending appointment (sets status='upcoming').
+ * Shorthand around updateAppointment for clarity at the call site.
+ * @param {string} id  - appointment UUID
+ * @returns {object} updated appointment with status='upcoming'
+ */
+export function approveAppointment(id) {
+  return api.patch(`/appointments/${encodeURIComponent(id)}`, { status: "upcoming" });
+}
+
+/**
+ * Patient rejects a pending appointment (sets status='rejected').
+ * @param {string} id  - appointment UUID
+ * @returns {object} updated appointment with status='rejected'
+ */
+export function rejectAppointment(id) {
+  return api.patch(`/appointments/${encodeURIComponent(id)}`, { status: "rejected" });
 }
 
 /**

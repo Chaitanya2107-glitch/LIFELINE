@@ -58,7 +58,7 @@ def create_appointment(doctor_id: int, data: dict) -> dict:
         "type":       data["type"],
         "location":   data.get("location"),
         "notes":      data.get("notes"),
-        "status":     "upcoming",
+        "status":     "pending",
     }
 
     response = supabase.table("appointments").insert(payload).execute()
@@ -89,10 +89,15 @@ def update_appointment(
       - doctor:  must be the appointment's doctor_id.
       - patient: must be the appointment's patient_id.
 
+    Patient approval transition:
+      - Patient may set status 'upcoming' (approve) or 'rejected' only when
+        the current status is 'pending'.
+
     Returns:
-        dict         — updated row on success.
-        "not_found"  — appt_id does not exist.
-        "forbidden"  — caller does not own this appointment.
+        dict                 — updated row on success.
+        "not_found"          — appt_id does not exist.
+        "forbidden"          — caller does not own this appointment.
+        "invalid_transition" — patient tried to approve/reject a non-pending appointment.
     """
     result = (
         supabase.table("appointments")
@@ -110,6 +115,12 @@ def update_appointment(
         return "forbidden"
     if role == "patient" and appt["patient_id"] != user_id:
         return "forbidden"
+
+    # Patient approval / rejection is only valid from 'pending' state.
+    requested_status = payload.get("status")
+    if role == "patient" and requested_status in {"upcoming", "rejected"}:
+        if appt["status"] != "pending":
+            return "invalid_transition"
 
     # Build update dict — only include fields that were explicitly supplied
     update: dict = {}

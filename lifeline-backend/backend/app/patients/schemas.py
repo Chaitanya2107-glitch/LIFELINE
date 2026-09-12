@@ -72,26 +72,3 @@ class PatientProfileUpdate(BaseModel):
     conditions: list[Any] | None = None
 
 
-class OtpRequestRequest(BaseModel):
-    """Body for POST /patient/request-otp."""
-    patient_code: str
-
-
-class OtpRequestResponse(BaseModel):
-    """Response for POST /patient/request-otp (demo mode — OTP in body)."""
-    patient_code: str
-    otp: str
-    expires_in_minutes: int
-
-
-class OtpVerifyRequest(BaseModel):
-    """Body for POST /patient/verify-otp."""
-    patient_code: str
-    otp: str
-
-
-class OtpVerifyResponse(BaseModel):
-    """Response for POST /patient/verify-otp — contains the patient session JWT."""
-    access_token: str
-    token_type: str
-    expires_in_minutes: int
