@@ -33,63 +33,45 @@ def generate_vitalis_response(
 
     records = get_all_medical_records(patient_id)
 
-    if not records:
-        return "No medical records found."
+    if records:
+        summary = generate_summary(patient_id)
+        context = f"Patient Medical Summary:\n\n{summary}\n\nMedical Records:\n\n"
+        for record in records:
+            context += (
+                f"Date: {record.get('created_at')}\n"
+                f"Doctor: {record.get('doctor')}\n"
+                f"Hospital: {record.get('hospital')}\n"
+                f"Diagnosis: {record.get('diagnosis')}\n"
+                f"Medicines: {_format_medicines(record.get('medicines', []))}\n"
+                "---\n\n"
+            )
+    else:
+        context = "No medical records are on file for this patient yet."
 
-    summary = generate_summary(patient_id)
+    prompt = f"""You are Vitalis, a medical assistant for the Lifeline app.
 
-    context = f"""
-Patient Medical Summary:
+You can answer two kinds of questions:
 
-{summary}
+1. Questions about this specific patient's own health history — answer these ONLY \
+using the Patient Information provided below. Never invent or assume facts not \
+present there. If the information is not in their records, say exactly:
+"I don't have enough information in your medical records for that."
 
+2. General medical knowledge questions (e.g. definitions, how a condition or test \
+works) — you may answer these using your general medical knowledge, even if \
+unrelated to anything in the patient's records. Keep these answers general and \
+educational, and do not claim the patient has or does not have the condition being \
+asked about unless that is explicitly stated in their records below.
 
-Medical Records:
-
-"""
-
-    for record in records:
-        context += f"""
-Date:
-{record.get("created_at")}
-
-Doctor:
-{record.get("doctor")}
-
-Hospital:
-{record.get("hospital")}
-
-Diagnosis:
-{record.get("diagnosis")}
-
-Medicines:
-{_format_medicines(record.get("medicines", []))}
-
----
-
-"""
-
-    prompt = f"""
-You are Vitalis, a medical assistant.
-
-Use only the provided patient information.
-
-Do not create medical facts that are not present.
-
-Do not answer using external knowledge about the patient's history.
-
-If the answer is unavailable, clearly say:
-"I don't have enough information in your medical records."
+Always clearly distinguish which type of question you are answering. Never present \
+general knowledge as if it were a fact about this patient's own health.
 
 Patient Information:
-
 {context}
 
 Question:
-
 {question}
 
-Answer:
-"""
+Answer:"""
 
     return generate(prompt)
