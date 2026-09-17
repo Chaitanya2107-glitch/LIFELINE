@@ -13,6 +13,7 @@ from app.database.supabase import supabase
 from app.patients import service as patient_service
 from app.patients.schemas import (
     CreatePatientRequest,
+    EmergencyQrResponse,
     PatientLoginRequest,
     PatientProfileResponse,
     PatientProfileUpdate,
@@ -215,3 +216,29 @@ def update_patient_profile(
     patient.setdefault("emergency_contacts", [])
     patient.setdefault("conditions", [])
     return patient
+
+
+@patient_otp_router.get("/emergency-qr", response_model=EmergencyQrResponse)
+def get_emergency_qr(current_user: dict = Depends(require_patient)):
+    """Return (or lazily generate) the patient's emergency QR token and the public URL.
+
+    Requires a patient JWT (role='patient').
+    The token is created with secrets.token_urlsafe(32) on first call and
+    cached in patients.emergency_qr_token thereafter.
+    """
+    token = patient_service.get_or_create_emergency_qr_token(current_user["patient_id"])
+    url = f"{settings.FRONTEND_BASE_URL}/emergency/{token}"
+    return {"token": token, "url": url}
+
+
+@patient_otp_router.post("/emergency-qr/regenerate", response_model=EmergencyQrResponse)
+def regenerate_emergency_qr(current_user: dict = Depends(require_patient)):
+    """Generate a fresh emergency QR token, immediately invalidating the previous one.
+
+    Requires a patient JWT (role='patient').
+    Any previously printed or saved QR code that pointed at the old token will
+    receive a 404 on the public endpoint after this call.
+    """
+    token = patient_service.regenerate_emergency_qr_token(current_user["patient_id"])
+    url = f"{settings.FRONTEND_BASE_URL}/emergency/{token}"
+    return {"token": token, "url": url}

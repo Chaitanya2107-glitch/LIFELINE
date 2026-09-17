@@ -82,6 +82,13 @@ function LandingPage() {
               <Stethoscope size={24} />
               Doctor Portal
             </Link>
+            <Link
+              to="/pharmacy/login"
+              className="flex items-center justify-center gap-3 bg-emerald-600/30 border-2 border-emerald-400 text-white px-8 py-5 rounded-2xl font-bold hover:bg-emerald-600/50 transition shadow-lg text-lg"
+            >
+              <Pill size={24} />
+              Pharmacy Portal
+            </Link>
           </div>
         </div>
       </section>

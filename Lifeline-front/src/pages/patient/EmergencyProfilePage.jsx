@@ -1,12 +1,13 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAuth } from "../../context/AuthContext";
 import PatientLayout from "../../layouts/PatientLayout";
 import {
   AlertOctagon, Phone, Pill, Heart, AlertTriangle, ShieldCheck,
   User, Users, CalendarDays, Droplets, ClipboardList, Stethoscope,
-  Loader2, Clock, Pencil, Check, X,
+  Loader2, Clock, Pencil, Check, X, QrCode, RefreshCw, Printer,
 } from "lucide-react";
-import { getPatientProfile, updatePatientProfile } from "../../api/patientAuth.js";
+import { QRCodeSVG } from "qrcode.react";
+import { getPatientProfile, updatePatientProfile, getEmergencyQr, regenerateEmergencyQr } from "../../api/patientAuth.js";
 import { getRecords } from "../../api/records.js";
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
@@ -15,6 +16,12 @@ function EmergencyProfilePage() {
   const [profile, setProfile] = useState(null);
   const [allergies, setAllergies] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // ── Emergency QR state ─────────────────────────────────────────────────────
+  const [qrUrl, setQrUrl] = useState(null);
+  const [qrLoading, setQrLoading] = useState(true);
+  const [qrRegenerating, setQrRegenerating] = useState(false);
+  const qrCardRef = useRef(null);
 
   // ── Emergency Contacts edit state ──────────────────────────────────────────
   const [editingContacts, setEditingContacts] = useState(false);
@@ -27,6 +34,14 @@ function EmergencyProfilePage() {
   const [conditionsDraft, setConditionsDraft] = useState([]);
   const [conditionsError, setConditionsError] = useState("");
   const [savingConditions, setSavingConditions] = useState(false);
+
+  useEffect(() => {
+    // Load QR token independently — failure here should not block the main profile
+    getEmergencyQr()
+      .then((data) => setQrUrl(data.url))
+      .catch(() => {/* stay null; user can retry */})
+      .finally(() => setQrLoading(false));
+  }, []);
 
   useEffect(() => {
     Promise.all([
@@ -45,6 +60,37 @@ function EmergencyProfilePage() {
       .catch(() => {/* stay on empty state */})
       .finally(() => setLoading(false));
   }, [currentUser?.patient_id]);
+
+  // ── QR handlers ────────────────────────────────────────────────────────────
+  const handleRegenerate = async () => {
+    if (!window.confirm(
+      "Any previously printed or saved QR code will stop working. Continue?"
+    )) return;
+    setQrRegenerating(true);
+    try {
+      const data = await regenerateEmergencyQr();
+      setQrUrl(data.url);
+    } catch {
+      /* error silently — user can retry */
+    } finally {
+      setQrRegenerating(false);
+    }
+  };
+
+  const handlePrintQr = () => {
+    const card = qrCardRef.current;
+    if (!card) return;
+    const printWindow = window.open("", "_blank", "width=500,height=600");
+    printWindow.document.write(`<!DOCTYPE html><html><head><title>Emergency QR</title>
+      <style>body{font-family:sans-serif;text-align:center;padding:40px}
+      h2{color:#dc2626}p{color:#374151;font-size:14px}svg{margin:16px auto;display:block}</style>
+      </head><body>${card.innerHTML}<p style="margin-top:16px;font-size:12px;color:#6b7280">
+      Scan this code in an emergency to view critical medical information.</p></body></html>`);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+    printWindow.close();
+  };
 
   // ── Contacts handlers ───────────────────────────────────────────────────────
   const startEditContacts = () => {
@@ -393,6 +439,49 @@ function EmergencyProfilePage() {
             ) : (
               <p className="text-sm text-slate-400">No emergency contacts recorded.</p>
             )
+          )}
+        </div>
+
+        {/* ── Emergency QR Code ──────────────────────────────────────── */}
+        <div className="bg-white border rounded-2xl p-6 mb-6 shadow-sm">
+          <h3 className="font-bold text-slate-700 flex items-center gap-2 mb-4">
+            <QrCode size={18} /> Emergency QR Code
+          </h3>
+          <p className="text-sm text-slate-500 mb-4">
+            Print or screenshot this code. Anyone who scans it in an emergency will see
+            your blood group, allergies, conditions and contact numbers — nothing else.
+          </p>
+
+          {qrLoading ? (
+            <div className="flex items-center gap-2 text-slate-400 text-sm">
+              <Loader2 size={16} className="animate-spin" /> Loading QR code…
+            </div>
+          ) : qrUrl ? (
+            <>
+              <div ref={qrCardRef} className="flex flex-col items-center gap-3 p-6 bg-slate-50 border border-slate-200 rounded-xl mb-4">
+                <p className="text-xs font-semibold text-red-600 uppercase tracking-wide">🚨 Emergency Medical Info</p>
+                <QRCodeSVG value={qrUrl} size={160} level="H" />
+                <p className="text-xs text-slate-400 text-center break-all">{qrUrl}</p>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={handleRegenerate}
+                  disabled={qrRegenerating}
+                  className="flex items-center gap-2 bg-slate-100 text-slate-700 px-4 py-2 rounded-xl text-sm font-semibold hover:bg-slate-200 transition disabled:opacity-60"
+                >
+                  {qrRegenerating ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                  Regenerate
+                </button>
+                <button
+                  onClick={handlePrintQr}
+                  className="flex items-center gap-2 bg-slate-700 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-slate-800 transition"
+                >
+                  <Printer size={14} /> Print
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-slate-400">Could not load QR code. Refresh the page to try again.</p>
           )}
         </div>
 

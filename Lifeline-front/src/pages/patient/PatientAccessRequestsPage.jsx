@@ -15,6 +15,20 @@ function respondToConsent(consentId, action) {
   return api.post(`/consent/${encodeURIComponent(consentId)}/respond`, { action });
 }
 
+// Who is asking — backend sends requester_* fields on /consent/pending.
+function requesterName(req) {
+  return req.requester_name || req.doctor_name || (req.requester_role === "pharmacist" ? "Pharmacist" : "Doctor");
+}
+
+function requesterLabel(req) {
+  if (req.requester_role === "pharmacist") return "Pharmacist";
+  return req.requester_specialization || req.specialization || "Doctor";
+}
+
+function requestedAt(req) {
+  return new Date(req.requested_at || req.created_at || req.requestedAt).toLocaleString("en-IN");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 function PatientAccessRequestsPage() {
@@ -71,7 +85,7 @@ function PatientAccessRequestsPage() {
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-slate-900">Access Requests</h1>
           <p className="text-slate-500 mt-2">
-            Review requests from doctors who want to access your previous medical records.
+            Review requests from doctors and pharmacists who want to access your medical records.
           </p>
         </div>
 
@@ -98,14 +112,12 @@ function PatientAccessRequestsPage() {
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <p className="font-bold text-slate-900 text-lg">
-                        {req.doctor_name || "Doctor"}
+                        {requesterName(req)}
                       </p>
                       <p className="text-sm font-mono text-slate-500">{req.doctor_id}</p>
-                      {req.specialization && (
-                        <p className="text-sm text-slate-500 mt-0.5">{req.specialization}</p>
-                      )}
+                      <p className="text-sm text-slate-500 mt-0.5">{requesterLabel(req)}</p>
                       <p className="text-xs text-slate-400 mt-2">
-                        Requested: {new Date(req.created_at || req.requestedAt).toLocaleString("en-IN")}
+                        Requested: {requestedAt(req)}
                       </p>
                     </div>
                     <span className="bg-orange-100 text-orange-700 text-xs font-semibold px-3 py-1.5 rounded-full flex items-center gap-1 shrink-0">
@@ -115,8 +127,13 @@ function PatientAccessRequestsPage() {
                   </div>
 
                   <div className="mt-4 p-4 bg-slate-50 rounded-2xl text-sm text-slate-600">
-                    <strong>{req.doctor_name || "This doctor"}</strong> is requesting access to view your full medical
-                    history. You can approve or deny this request.
+                    {req.requester_role === "pharmacist" ? (
+                      <><strong>{requesterName(req)}</strong> (pharmacist) is requesting access to view and dispense
+                      your prescriptions. You can approve or deny this request.</>
+                    ) : (
+                      <><strong>{requesterName(req)}</strong> is requesting access to view your full medical
+                      history. You can approve or deny this request.</>
+                    )}
                     If approved, access will expire in 7 days.
                   </div>
 
@@ -158,10 +175,10 @@ function PatientAccessRequestsPage() {
               {resolved.map((req) => (
                 <div key={req.id} className="bg-white border rounded-2xl p-5 flex items-center gap-4">
                   <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-slate-800">{req.doctor_name || "Doctor"}</p>
-                    <p className="text-xs font-mono text-slate-500">{req.doctor_id}</p>
+                    <p className="font-semibold text-slate-800">{requesterName(req)}</p>
+                    <p className="text-xs font-mono text-slate-500">{requesterLabel(req)} · {req.doctor_id}</p>
                     <p className="text-xs text-slate-400 mt-1">
-                      {new Date(req.created_at || req.requestedAt).toLocaleString("en-IN")}
+                      {requestedAt(req)}
                     </p>
                   </div>
                   <span className={`text-xs font-semibold px-3 py-1.5 rounded-full ${getStatusBadge(req.status)}`}>

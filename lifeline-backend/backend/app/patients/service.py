@@ -1,6 +1,7 @@
 from app.database.supabase import supabase
 from app.models.patient import PatientRecord
 from app.utils.patient_code import generate_patient_code
+from app.utils.qr_token import generate_qr_token
 from app.utils.logger import logger
 
 
@@ -104,3 +105,132 @@ def get_patient_by_code(patient_code: str) -> PatientRecord | None:
     return None
 
 
+
+
+# ──────────────────────────────────────────────
+# Emergency QR token
+# ──────────────────────────────────────────────
+
+def get_or_create_emergency_qr_token(patient_id: str) -> str:
+    """Return the patient's emergency QR token, generating one if it doesn't exist yet.
+
+    Retries up to 3 times on a unique-constraint collision (23505).
+    Token is stored in patients.emergency_qr_token.
+    """
+    # Fast path: token already set
+    row = (
+        supabase
+        .table("patients")
+        .select("emergency_qr_token")
+        .eq("id", patient_id)
+        .limit(1)
+        .execute()
+    )
+    if row.data and row.data[0].get("emergency_qr_token"):
+        return row.data[0]["emergency_qr_token"]
+
+    # Slow path: generate and persist
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        token = generate_qr_token()
+        try:
+            result = (
+                supabase
+                .table("patients")
+                .update({"emergency_qr_token": token})
+                .eq("id", patient_id)
+                .execute()
+            )
+            logger.info("emergency_qr_token generated | patient_id={}", patient_id)
+            return result.data[0]["emergency_qr_token"]
+        except Exception as e:
+            if "23505" in str(e) and attempt < max_attempts:
+                logger.warning(
+                    "emergency_qr_token collision — retrying ({}/{})", attempt, max_attempts
+                )
+                continue
+            raise
+
+    raise RuntimeError(  # pragma: no cover
+        f"Failed to generate a unique emergency_qr_token after {max_attempts} attempts."
+    )
+
+
+def regenerate_emergency_qr_token(patient_id: str) -> str:
+    """Always generate a fresh token, overwriting the existing one.
+
+    The old token becomes invalid immediately — any QR codes pointing to it
+    will receive a 404 on the public endpoint.
+    Retries up to 3 times on a unique-constraint collision (23505).
+    """
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        token = generate_qr_token()
+        try:
+            result = (
+                supabase
+                .table("patients")
+                .update({"emergency_qr_token": token})
+                .eq("id", patient_id)
+                .execute()
+            )
+            logger.info("emergency_qr_token regenerated | patient_id={}", patient_id)
+            return result.data[0]["emergency_qr_token"]
+        except Exception as e:
+            if "23505" in str(e) and attempt < max_attempts:
+                logger.warning(
+                    "emergency_qr_token collision on regenerate — retrying ({}/{})",
+                    attempt,
+                    max_attempts,
+                )
+                continue
+            raise
+
+    raise RuntimeError(  # pragma: no cover
+        f"Failed to regenerate a unique emergency_qr_token after {max_attempts} attempts."
+    )
+
+
+def get_emergency_info_by_token(token: str) -> dict | None:
+    """Look up a patient by emergency_qr_token and return ONLY safe emergency fields.
+
+    Returns None if the token does not match any patient.
+
+    The returned dict contains ONLY:
+      name, blood_group, date_of_birth, conditions, emergency_contacts, allergies
+
+    It NEVER contains: id, patient_code, email, phone, password_hash,
+    diagnoses, medicines, lab_values, or any medical_records row details.
+    """
+    row = (
+        supabase
+        .table("patients")
+        .select("id, name, blood_group, date_of_birth, conditions, emergency_contacts")
+        .eq("emergency_qr_token", token)
+        .limit(1)
+        .execute()
+    )
+    if not row.data:
+        return None
+
+    patient = row.data[0]
+    patient_id = patient.pop("id")  # used only to fetch allergies; not returned
+
+    # Aggregate unique allergies from all medical_records for this patient
+    records_resp = (
+        supabase
+        .table("medical_records")
+        .select("allergies")
+        .eq("patient_id", patient_id)
+        .execute()
+    )
+    allergy_set: set[str] = set()
+    for rec in (records_resp.data or []):
+        for a in (rec.get("allergies") or []):
+            if isinstance(a, str) and a.strip():
+                allergy_set.add(a.strip())
+
+    patient["allergies"] = sorted(allergy_set)
+    patient.setdefault("conditions", [])
+    patient.setdefault("emergency_contacts", [])
+    return patient

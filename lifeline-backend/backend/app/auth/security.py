@@ -120,3 +120,16 @@ def require_patient(current_user: dict = Depends(get_current_user)) -> dict:
         )
     return current_user
 
+
+def require_pharmacist(current_user: dict = Depends(get_current_user)) -> dict:
+    """Dependency: allow only users with role='pharmacist'.
+
+    Use on pharmacy endpoints (e.g. viewing prescriptions, dispensing).
+    """
+    if current_user.get("role") != "pharmacist":
+        raise HTTPException(
+            status_code=403,
+            detail="Pharmacist access required"
+        )
+    return current_user
+

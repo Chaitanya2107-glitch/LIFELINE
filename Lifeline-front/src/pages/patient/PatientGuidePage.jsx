@@ -27,12 +27,12 @@ const sections = [
   {
     icon: CalendarDays,
     color: "text-green-600 bg-green-100",
-    title: "How Appointment Approval Works",
+    title: "How Appointment Requests Work",
     content: [
-      "When a doctor schedules an appointment for you, it appears in your Appointments page with a 'Pending' status.",
-      "You can Approve the appointment (it becomes 'Upcoming') or Decline it.",
-      "The appointment is only confirmed once you approve it — the doctor cannot confirm it on your behalf.",
-      "You can also cancel any upcoming appointment from the same page.",
+      "Open Appointments and click 'Request Appointment'. Choose a doctor, visit type, preferred date and time, and describe the reason.",
+      "Your request shows as 'Awaiting Doctor' until the doctor responds.",
+      "The doctor confirms the exact date, time and place (it moves to 'Upcoming'), or declines with a reason.",
+      "You can withdraw a request or cancel an upcoming appointment from the same page.",
     ],
   },
   {

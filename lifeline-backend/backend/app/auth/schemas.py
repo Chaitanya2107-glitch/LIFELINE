@@ -16,7 +16,7 @@ class RegisterRequest(BaseModel):
     @field_validator("role")
     @classmethod
     def role_must_be_valid(cls, v: str) -> str:
-        allowed = {"doctor", "clerk"}
+        allowed = {"doctor", "clerk", "pharmacist"}
         if v not in allowed:
             raise ValueError(f"role must be one of: {', '.join(sorted(allowed))}")
         return v
@@ -31,6 +31,11 @@ class RegisterRequest(BaseModel):
         if self.role == "doctor" and not self.med_reg_no:
             raise ValueError(
                 "med_reg_no is required for doctors"
+            )
+        # Pharmacists store their pharmacy licence number in med_reg_no.
+        if self.role == "pharmacist" and not self.med_reg_no:
+            raise ValueError(
+                "med_reg_no (pharmacy licence number) is required for pharmacists"
             )
         return self
 

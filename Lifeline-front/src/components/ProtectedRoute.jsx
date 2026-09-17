@@ -25,6 +25,7 @@ export default function ProtectedRoute({ children, requiredRole, redirectTo = "/
     // Wrong portal — send to their own portal
     if (currentUser.role === "doctor") return <Navigate to="/doctor/dashboard" replace />;
     if (currentUser.role === "patient") return <Navigate to="/patient/dashboard" replace />;
+    if (currentUser.role === "pharmacist") return <Navigate to="/pharmacy/dashboard" replace />;
     return <Navigate to={redirectTo} replace />;
   }
 

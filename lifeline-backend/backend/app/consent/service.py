@@ -25,6 +25,7 @@ ConsentError = Literal["not_found", "forbidden", "already_responded"]
 def request_consent(
     doctor_id: int,
     patient_id: str,
+    actor_role: str = "doctor",
 ) -> ConsentRecord | None:
     """Doctor requests access to a patient's medical history.
 
@@ -33,6 +34,9 @@ def request_consent(
       return it without inserting a new row.
       (The idx_consent_unique_pending partial index enforces this at DB level
       too, but SELECT-first avoids triggering a constraint error.)
+
+    doctor_id holds the requester's users.id — a doctor or a pharmacist.
+    actor_role is written to the audit log.
 
     Returns the ConsentRecord (new or existing pending), or None if the
     patient does not exist.
@@ -83,7 +87,7 @@ def request_consent(
     )
 
     write_access_log(
-        actor_role="doctor",
+        actor_role=actor_role,
         action="consent_requested",
         actor_user_id=doctor_id,
         patient_id=patient_id,
@@ -96,17 +100,28 @@ def request_consent(
 def get_pending_consents_for_patient(
     patient_id: str,
 ) -> list[ConsentRecord]:
-    """Return all pending consent requests for this patient, oldest first."""
+    """Return all pending consent requests for this patient, oldest first.
+
+    Each row includes requester_name / requester_role / requester_specialization
+    from the users table so the patient can see who is asking.
+    """
     response = (
         supabase
         .table("consent_requests")
-        .select("*")
+        .select("*, users!doctor_id(name, role, specialization)")
         .eq("patient_id", patient_id)
         .eq("status", "pending")
         .order("requested_at", desc=False)
         .execute()
     )
-    return response.data
+    rows = []
+    for row in response.data:
+        requester = row.pop("users", None) or {}
+        row["requester_name"] = requester.get("name")
+        row["requester_role"] = requester.get("role")
+        row["requester_specialization"] = requester.get("specialization")
+        rows.append(row)
+    return rows
 
 
 def get_consents_for_doctor(doctor_id: int) -> list[ConsentRecord]:

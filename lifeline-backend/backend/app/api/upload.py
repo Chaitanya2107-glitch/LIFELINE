@@ -15,6 +15,7 @@ from app.auth.security import (
 from app.care_plan.service import create_care_plan_item
 from app.database.supabase import supabase
 from app.patients.service import get_patient_by_id
+from app.pharmacy.service import create_prescription_for_record
 from app.services.medical_record_service import (
     get_record_by_hash,
     get_all_medical_records,
@@ -173,6 +174,18 @@ async def upload_report(
                     "Care plan item creation failed for record {} follow-up '{}': {}",
                     record_id,
                     follow_up_text[:60],
+                    str(exc),
+                )
+
+        # Create a pharmacy prescription when the record lists medicines.
+        # Non-fatal, same as care plan creation.
+        if data.get("medicines"):
+            try:
+                create_prescription_for_record(record_id)
+            except Exception as exc:
+                logger.warning(
+                    "Prescription creation failed for record {}: {}",
+                    record_id,
                     str(exc),
                 )
 

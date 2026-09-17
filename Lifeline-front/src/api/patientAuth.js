@@ -56,3 +56,21 @@ export function getPatientProfile() {
 export function updatePatientProfile(data) {
   return api.patch("/patient/profile", data);
 }
+
+/**
+ * GET /patient/emergency-qr
+ * Returns (or lazily generates) the patient's emergency QR token and public URL.
+ * @returns {{ token: string, url: string }}
+ */
+export function getEmergencyQr() {
+  return api.get("/patient/emergency-qr");
+}
+
+/**
+ * POST /patient/emergency-qr/regenerate
+ * Generates a fresh emergency QR token, invalidating the previous one.
+ * @returns {{ token: string, url: string }}
+ */
+export function regenerateEmergencyQr() {
+  return api.post("/patient/emergency-qr/regenerate", {});
+}

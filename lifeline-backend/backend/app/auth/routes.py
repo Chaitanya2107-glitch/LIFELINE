@@ -120,7 +120,7 @@ def get_me(current_user=Depends(get_current_user)):
     # Enrich the payload with profile fields for doctor and clerk tokens.
     # The JWT encodes only { sub, user_id, role }; name, email, and the
     # other profile columns must be fetched from the users table.
-    if current_user.get("role") in {"doctor", "clerk"} and current_user.get("user_id"):
+    if current_user.get("role") in {"doctor", "clerk", "pharmacist"} and current_user.get("user_id"):
         row = (
             supabase.table("users")
             .select("name, email, specialization, phone, med_reg_no")
@@ -142,7 +142,8 @@ def get_me(current_user=Depends(get_current_user)):
     user_id = current_user.get("user_id")
     if user_id is not None:
         payload["id"] = user_id
-        payload["displayId"] = f"DOC-{user_id}"
+        prefix = "PHR" if current_user.get("role") == "pharmacist" else "DOC"
+        payload["displayId"] = f"{prefix}-{user_id}"
 
     return {
         "message": "Authenticated successfully",

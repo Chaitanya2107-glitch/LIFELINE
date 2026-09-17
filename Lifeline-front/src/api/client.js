@@ -62,7 +62,9 @@ export async function request(path, opts = {}) {
 
   if (response.status === 401) {
     clearToken();
-    window.location.href = "/doctor/login";
+    window.location.href = window.location.pathname.startsWith("/pharmacy")
+      ? "/pharmacy/login"
+      : "/doctor/login";
     throw new Error("Session expired. Please log in again.");
   }
 

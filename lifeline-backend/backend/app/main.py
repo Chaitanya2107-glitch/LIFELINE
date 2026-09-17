@@ -17,6 +17,8 @@ from app.patients.routes import patients_router, patient_otp_router
 from app.consent.routes import consent_router
 from app.care_plan.routes import care_plan_router
 from app.appointments.routes import appointments_router
+from app.emergency.routes import emergency_router
+from app.pharmacy.routes import router as pharmacy_router
 
 app = FastAPI(title="Lifeline Backend")
 
@@ -53,6 +55,8 @@ app.include_router(patient_otp_router)
 app.include_router(consent_router)
 app.include_router(care_plan_router)
 app.include_router(appointments_router)
+app.include_router(emergency_router)
+app.include_router(pharmacy_router)
 
 @app.get("/")
 def root():

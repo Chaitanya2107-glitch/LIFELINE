@@ -1,466 +1,343 @@
 /**
  * DoctorAppointmentsPage
  *
- * Doctors view their own appointment schedule and can:
- *   - See upcoming / pending / past / cancelled appointments
- *   - Create a new appointment for a patient (requires approved consent)
- *   - Update location / notes on an existing appointment
- *   - Cancel an appointment
- *
- * New appointments are created with status='pending'.
- * The patient must approve them from their Appointments page.
+ * Patients request appointments; doctors confirm them here.
+ *   - New requests: confirm with the final date / time / location, or decline
+ *   - Upcoming: mark completed, reschedule / edit, or cancel
+ *   - Past & closed: read-only history
  *
  * API functions used:
- *   getAppointments()            GET  /appointments
- *   createAppointment(data)      POST /appointments
- *   updateAppointment(id, data)  PATCH /appointments/{id}
- *   cancelAppointment(id)        DELETE /appointments/{id}
+ *   getAppointments()                 GET    /appointments
+ *   approveAppointment(id, schedule)  PATCH  /appointments/{id}  status='upcoming'
+ *   rejectAppointment(id, reason)     PATCH  /appointments/{id}  status='rejected'
+ *   completeAppointment(id)           PATCH  /appointments/{id}  status='completed'
+ *   updateAppointment(id, data)       PATCH  /appointments/{id}
+ *   cancelAppointment(id)             DELETE /appointments/{id}
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import DoctorLayout from "../../layouts/DoctorLayout";
 import {
-  CalendarDays, Clock, MapPin, FileText, CheckCircle, X, Plus,
-  Loader, AlertTriangle, ChevronDown, ChevronUp, User,
+  CalendarDays, Clock, MapPin, FileText, CheckCircle, X, Loader,
+  AlertTriangle, User, Inbox, MessageSquare, Check,
 } from "lucide-react";
 import {
   getAppointments,
-  createAppointment,
+  approveAppointment,
+  rejectAppointment,
+  completeAppointment,
   updateAppointment,
   cancelAppointment,
 } from "../../api/appointments.js";
-import { searchPatients } from "../../api/patients.js";
+import {
+  TYPE_COLOR, STATUS_LABEL, STATUS_COLOR,
+  todayIso, formatDate, formatTime, daysFromNow, isDatePast, groupAppointments,
+} from "../../components/appointments/appointmentHelpers.js";
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+const inputClass =
+  "w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white";
 
-function formatDate(dateStr) {
-  if (!dateStr) return "—";
-  return new Date(dateStr + "T00:00:00").toLocaleDateString("en-IN", {
-    weekday: "short", day: "numeric", month: "long", year: "numeric",
+// Remember the last location typed, purely as a convenience for the next confirmation.
+const LOCATION_KEY = "lifeline_last_appt_location";
+function loadLastLocation() {
+  try { return localStorage.getItem(LOCATION_KEY) || ""; } catch { return ""; }
+}
+function saveLastLocation(value) {
+  try { localStorage.setItem(LOCATION_KEY, value); } catch { /* ignore */ }
+}
+
+// ── Schedule form (confirm / reschedule) ───────────────────────────────────────
+
+function ScheduleForm({ appt, submitLabel, onSubmit, onClose }) {
+  const [form, setForm] = useState({
+    date:     isDatePast(appt.date) ? todayIso() : appt.date,
+    time:     /^\d{2}:\d{2}/.test(appt.time) ? appt.time.slice(0, 5) : "",
+    location: appt.location || loadLastLocation(),
+    notes:    appt.notes || "",
   });
-}
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
-function daysFromNow(dateStr) {
-  const diff = Math.ceil((new Date(dateStr + "T00:00:00") - new Date()) / (1000 * 60 * 60 * 24));
-  if (diff === 0) return "Today";
-  if (diff === 1) return "Tomorrow";
-  if (diff < 0)  return `${Math.abs(diff)}d ago`;
-  return `In ${diff} days`;
-}
+  const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
 
-const TYPE_COLOR = {
-  "Follow-up":          "bg-blue-100 text-blue-700",
-  "Routine Check-up":   "bg-green-100 text-green-700",
-  "Consultation":       "bg-orange-100 text-orange-700",
-  "Holter Monitor Review": "bg-purple-100 text-purple-700",
-};
-const APPOINTMENT_TYPES = [
-  "Follow-up",
-  "Routine Check-up",
-  "Consultation",
-  "Holter Monitor Review",
-  "Other",
-];
-
-const STATUS_COLOR = {
-  pending:   "bg-amber-100 text-amber-700",
-  upcoming:  "bg-blue-100 text-blue-700",
-  completed: "bg-green-100 text-green-700",
-  cancelled: "bg-red-100 text-red-700",
-  rejected:  "bg-slate-100 text-slate-600",
-};
-
-// ── Appointment card (doctor view) ─────────────────────────────────────────────
-
-function AppointmentCard({ appt, onUpdate, onCancel }) {
-  const [expanded, setExpanded]   = useState(false);
-  const [editing,  setEditing]    = useState(false);
-  const [saving,   setSaving]     = useState(false);
-  const [cancelling, setCancelling] = useState(false);
-  const [notes,    setNotes]      = useState(appt.notes || "");
-  const [location, setLocation]   = useState(appt.location || "");
-
-  const isCancelled = appt.status === "cancelled" || appt.status === "rejected";
-  const isPast      = appt.status === "completed" || new Date(appt.date + "T00:00:00") < new Date();
-  const isPending   = appt.status === "pending";
-  const days        = !isPast && !isCancelled && !isPending ? daysFromNow(appt.date) : null;
-
-  const handleSave = () => {
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!form.date || !form.time || !form.location.trim()) {
+      setError("Date, time and location are required.");
+      return;
+    }
     setSaving(true);
-    updateAppointment(appt.id, { notes: notes || null, location: location || null })
-      .then((updated) => { onUpdate(updated); setEditing(false); })
-      .catch((err) => alert(err.message || "Failed to save changes."))
+    setError("");
+    saveLastLocation(form.location.trim());
+    onSubmit({
+      date: form.date,
+      time: form.time,
+      location: form.location.trim(),
+      ...(form.notes.trim() ? { notes: form.notes.trim() } : {}),
+    })
+      .then(onClose)
+      .catch((err) => setError(err.message || "Could not save."))
       .finally(() => setSaving(false));
   };
 
-  const handleCancel = () => {
-    if (!window.confirm("Cancel this appointment? This cannot be undone.")) return;
-    setCancelling(true);
-    cancelAppointment(appt.id)
-      .then((updated) => onCancel(updated))
-      .catch((err) => alert(err.message || "Failed to cancel appointment."))
-      .finally(() => setCancelling(false));
+  return (
+    <form onSubmit={handleSubmit} className="mt-4 pt-4 border-t space-y-3">
+      <div className="grid sm:grid-cols-3 gap-3">
+        <div>
+          <label className="text-xs font-semibold text-slate-500 block mb-1">Date *</label>
+          <input type="date" value={form.date} min={todayIso()} onChange={set("date")} className={inputClass} />
+        </div>
+        <div>
+          <label className="text-xs font-semibold text-slate-500 block mb-1">Time *</label>
+          <input type="time" value={form.time} onChange={set("time")} className={inputClass} />
+        </div>
+        <div>
+          <label className="text-xs font-semibold text-slate-500 block mb-1">Location *</label>
+          <input type="text" value={form.location} onChange={set("location")} placeholder="Room 204, City Hospital" className={inputClass} />
+        </div>
+      </div>
+      <div>
+        <label className="text-xs font-semibold text-slate-500 block mb-1">Note for the patient</label>
+        <textarea
+          rows={2}
+          value={form.notes}
+          onChange={set("notes")}
+          placeholder="e.g. Please bring your previous reports, come fasting…"
+          className={`${inputClass} resize-none`}
+        />
+      </div>
+      {error && <p className="text-xs text-red-600 flex items-center gap-1"><AlertTriangle size={12} /> {error}</p>}
+      <div className="flex gap-2">
+        <button
+          type="submit"
+          disabled={saving}
+          className="flex items-center gap-1.5 text-xs font-semibold bg-green-600 text-white px-4 py-2 rounded-xl hover:bg-green-700 transition disabled:opacity-50"
+        >
+          {saving ? <Loader size={13} className="animate-spin" /> : <Check size={13} />}
+          {submitLabel}
+        </button>
+        <button type="button" onClick={onClose} className="text-xs font-semibold text-slate-600 px-4 py-2 rounded-xl hover:bg-slate-100 transition">
+          Close
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// ── Decline form ───────────────────────────────────────────────────────────────
+
+function DeclineForm({ onSubmit, onClose }) {
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    setSaving(true);
+    onSubmit(reason.trim())
+      .then(onClose)
+      .catch((err) => setError(err.message || "Could not decline."))
+      .finally(() => setSaving(false));
   };
 
   return (
-    <div className={`bg-white border rounded-2xl shadow-sm transition ${isCancelled ? "opacity-60" : ""}`}>
-      {/* Header row */}
-      <div
-        className="flex items-start gap-4 p-5 cursor-pointer"
-        onClick={() => setExpanded((p) => !p)}
-      >
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-2 mb-1">
-            <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${STATUS_COLOR[appt.status] || "bg-slate-100 text-slate-600"}`}>
-              {appt.status === "pending" ? "Pending patient approval" : appt.status}
-            </span>
-            <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${TYPE_COLOR[appt.type] || "bg-slate-100 text-slate-600"}`}>
-              {appt.type}
-            </span>
-            {days && (
-              <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
-                days === "Today"    ? "bg-green-600 text-white"    :
-                days === "Tomorrow" ? "bg-blue-100 text-blue-700" :
-                "bg-slate-100 text-slate-600"
-              }`}>
-                {days}
-              </span>
-            )}
-          </div>
-
-          <div className="flex flex-wrap gap-4 text-sm text-slate-600 mt-1">
-            <span className="flex items-center gap-1.5">
-              <CalendarDays size={13} className="text-slate-400" />
-              {formatDate(appt.date)}
-            </span>
-            <span className="flex items-center gap-1.5">
-              <Clock size={13} className="text-slate-400" />
-              {appt.time}
-            </span>
-            {appt.location && (
-              <span className="flex items-center gap-1.5">
-                <MapPin size={13} className="text-slate-400" />
-                {appt.location}
-              </span>
-            )}
-          </div>
-
-          <p className="text-xs text-slate-400 mt-1 font-mono">
-            Patient: {appt.patient_id}
-          </p>
-        </div>
-        <button className="text-slate-400 shrink-0 mt-0.5">
-          {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+    <form onSubmit={handleSubmit} className="mt-4 pt-4 border-t space-y-3">
+      <label className="text-xs font-semibold text-slate-500 block">Reason (shown to the patient)</label>
+      <textarea
+        rows={2}
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder="e.g. Please consult a cardiologist for this concern."
+        className={`${inputClass} resize-none`}
+      />
+      {error && <p className="text-xs text-red-600">{error}</p>}
+      <div className="flex gap-2">
+        <button
+          type="submit"
+          disabled={saving}
+          className="text-xs font-semibold bg-red-600 text-white px-4 py-2 rounded-xl hover:bg-red-700 transition disabled:opacity-50"
+        >
+          {saving ? "Declining…" : "Decline Request"}
+        </button>
+        <button type="button" onClick={onClose} className="text-xs font-semibold text-slate-600 px-4 py-2 rounded-xl hover:bg-slate-100 transition">
+          Close
         </button>
       </div>
+    </form>
+  );
+}
 
-      {/* Expanded detail / edit */}
-      {expanded && (
-        <div className="px-5 pb-5 border-t pt-4 bg-slate-50 space-y-3">
-          {appt.notes && !editing && (
-            <div className="flex items-start gap-2 text-sm text-slate-600">
-              <FileText size={13} className="text-slate-400 shrink-0 mt-0.5" />
-              {appt.notes}
-            </div>
+// ── Appointment card ───────────────────────────────────────────────────────────
+
+function AppointmentCard({ appt, onUpdate }) {
+  const [mode, setMode] = useState(null); // "confirm" | "decline" | "edit" | null
+  const [busy, setBusy] = useState(false);
+
+  const isPending  = appt.status === "pending";
+  const isUpcoming = appt.status === "upcoming";
+  const datePassed = isDatePast(appt.date);
+  const days = isUpcoming && !datePassed ? daysFromNow(appt.date) : null;
+
+  const run = (promise) => {
+    setBusy(true);
+    return promise
+      .then(onUpdate)
+      .catch((err) => alert(err.message || "Something went wrong."))
+      .finally(() => setBusy(false));
+  };
+
+  const handleComplete = () => run(completeAppointment(appt.id));
+  const handleCancel = () => {
+    if (!window.confirm("Cancel this appointment? The patient will see it as cancelled.")) return;
+    run(cancelAppointment(appt.id));
+  };
+
+  return (
+    <div className={`bg-white border rounded-2xl shadow-sm p-5 ${isPending ? "border-amber-200" : ""} ${
+      !isPending && !isUpcoming ? "opacity-70" : ""
+    }`}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3 min-w-0">
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${isPending ? "bg-amber-100 text-amber-600" : "bg-blue-100 text-blue-600"}`}>
+            <User size={18} />
+          </div>
+          <div className="min-w-0">
+            <p className="font-semibold text-slate-900">{appt.patient_name || "Patient"}</p>
+            <p className="text-xs font-mono text-slate-500">{appt.patient_code || appt.patient_id}</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap justify-end gap-2 shrink-0">
+          {days && (
+            <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
+              days === "Today" ? "bg-green-600 text-white" : days === "Tomorrow" ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-600"
+            }`}>{days}</span>
           )}
+          <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${STATUS_COLOR[appt.status] || "bg-slate-100 text-slate-600"}`}>
+            {isPending ? "New request" : isUpcoming && datePassed ? "Date passed" : STATUS_LABEL[appt.status] || appt.status}
+          </span>
+          <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${TYPE_COLOR[appt.type] || "bg-slate-100 text-slate-600"}`}>
+            {appt.type}
+          </span>
+        </div>
+      </div>
 
+      <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-sm text-slate-600 mt-3">
+        <span className="flex items-center gap-1.5">
+          <CalendarDays size={13} className="text-slate-400" />
+          {isPending ? "Preferred: " : ""}{formatDate(appt.date)}
+        </span>
+        <span className="flex items-center gap-1.5">
+          <Clock size={13} className="text-slate-400" />
+          {formatTime(appt.time)}
+        </span>
+        {appt.location && !isPending && (
+          <span className="flex items-center gap-1.5"><MapPin size={13} className="text-slate-400" />{appt.location}</span>
+        )}
+      </div>
+
+      {appt.reason && (
+        <p className="flex items-start gap-1.5 text-sm text-slate-600 mt-2">
+          <FileText size={13} className="text-slate-400 shrink-0 mt-0.5" /> Reason: {appt.reason}
+        </p>
+      )}
+      {appt.notes && !mode && (
+        <p className="flex items-start gap-1.5 text-sm text-slate-500 mt-1">
+          <MessageSquare size={13} className="text-slate-400 shrink-0 mt-0.5" />
+          {appt.status === "rejected" ? "Declined: " : "Note: "}{appt.notes}
+        </p>
+      )}
+
+      {/* Actions */}
+      {!mode && (isPending || isUpcoming) && (
+        <div className="flex flex-wrap gap-3 mt-4 pt-3 border-t">
           {isPending && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-700">
-              Waiting for the patient to approve this appointment.
-            </div>
+            <>
+              <button onClick={() => setMode("confirm")} className="flex items-center gap-1.5 text-xs font-semibold bg-green-600 text-white px-4 py-2 rounded-xl hover:bg-green-700 transition">
+                <Check size={13} /> Confirm &amp; Schedule
+              </button>
+              <button onClick={() => setMode("decline")} className="flex items-center gap-1.5 text-xs font-semibold text-red-600 border border-red-200 px-4 py-2 rounded-xl hover:bg-red-50 transition">
+                <X size={13} /> Decline
+              </button>
+            </>
           )}
+          {isUpcoming && (
+            <>
+              <button onClick={handleComplete} disabled={busy} className="flex items-center gap-1.5 text-xs font-semibold bg-green-600 text-white px-4 py-2 rounded-xl hover:bg-green-700 transition disabled:opacity-50">
+                <CheckCircle size={13} /> Mark Completed
+              </button>
+              <button onClick={() => setMode("edit")} className="text-xs font-semibold text-blue-600 px-3 py-2 rounded-xl hover:bg-blue-50 transition">
+                Reschedule / Edit
+              </button>
+              <button onClick={handleCancel} disabled={busy} className="flex items-center gap-1 text-xs font-semibold text-red-600 px-3 py-2 rounded-xl hover:bg-red-50 transition disabled:opacity-50">
+                <X size={12} /> Cancel
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
-          {editing ? (
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs font-semibold text-slate-500 block mb-1">Location</label>
-                <input
-                  type="text"
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  placeholder="e.g. Room 204, City Hospital"
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-slate-500 block mb-1">Notes</label>
-                <textarea
-                  rows={2}
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Additional notes for the patient…"
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
-                />
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleSave}
-                  disabled={saving}
-                  className="text-xs font-semibold bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 transition disabled:opacity-50"
-                >
-                  {saving ? "Saving…" : "Save"}
-                </button>
-                <button
-                  onClick={() => { setEditing(false); setNotes(appt.notes || ""); setLocation(appt.location || ""); }}
-                  className="text-xs font-semibold text-slate-600 px-4 py-2 rounded-xl hover:bg-slate-200 transition"
-                >
-                  Discard
-                </button>
-              </div>
-            </div>
-          ) : (
-            !isCancelled && (
-              <div className="flex gap-3 flex-wrap">
-                <button
-                  onClick={() => setEditing(true)}
-                  className="text-xs font-semibold text-blue-600 hover:text-blue-700 transition"
-                >
-                  Edit location / notes
-                </button>
-                {!isPast && (
-                  <button
-                    onClick={handleCancel}
-                    disabled={cancelling}
-                    className="flex items-center gap-1 text-xs font-semibold text-red-600 hover:text-red-700 disabled:opacity-50 transition"
-                  >
-                    <X size={12} />
-                    {cancelling ? "Cancelling…" : "Cancel appointment"}
-                  </button>
-                )}
-              </div>
-            )
-          )}
+      {mode === "confirm" && (
+        <ScheduleForm
+          appt={appt}
+          submitLabel="Confirm Appointment"
+          onSubmit={(schedule) => approveAppointment(appt.id, schedule).then(onUpdate)}
+          onClose={() => setMode(null)}
+        />
+      )}
+      {mode === "edit" && (
+        <ScheduleForm
+          appt={appt}
+          submitLabel="Save Changes"
+          onSubmit={(schedule) => updateAppointment(appt.id, schedule).then(onUpdate)}
+          onClose={() => setMode(null)}
+        />
+      )}
+      {mode === "decline" && (
+        <DeclineForm
+          onSubmit={(reason) => rejectAppointment(appt.id, reason).then(onUpdate)}
+          onClose={() => setMode(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Page ───────────────────────────────────────────────────────────────────────
+
+function Section({ icon: Icon, color, title, items, onUpdate, empty }) {
+  return (
+    <div>
+      <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center gap-2">
+        <Icon size={20} className={color} /> {title}
+        {items.length > 0 && <span className="text-sm font-semibold text-slate-400">({items.length})</span>}
+      </h2>
+      {items.length === 0 ? (
+        empty && <p className="text-sm text-slate-400 bg-white border rounded-2xl p-5">{empty}</p>
+      ) : (
+        <div className="space-y-4">
+          {items.map((a) => <AppointmentCard key={a.id} appt={a} onUpdate={onUpdate} />)}
         </div>
       )}
     </div>
   );
 }
 
-// ── Create appointment form ────────────────────────────────────────────────────
-
-function CreateAppointmentForm({ onCreated, onClose }) {
-  // Patient lookup — UUID is resolved internally, never shown to the doctor
-  const [lflQuery,       setLflQuery]       = useState("");
-  const [patientFound,   setPatientFound]   = useState(null);
-  const [lookupLoading,  setLookupLoading]  = useState(false);
-  const [lookupError,    setLookupError]    = useState("");
-
-  const [form, setForm] = useState({
-    date:     "",
-    time:     "",
-    type:     APPOINTMENT_TYPES[0],
-    location: "",
-    notes:    "",
-  });
-  const [saving, setSaving] = useState(false);
-  const [error,  setError]  = useState("");
-
-  const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
-
-  const handleLookup = async () => {
-    const code = lflQuery.trim().toUpperCase();
-    if (!code) return;
-    setLookupError("");
-    setPatientFound(null);
-    setLookupLoading(true);
-    try {
-      const p = await searchPatients(code);
-      setPatientFound(p);
-    } catch (err) {
-      setLookupError(err.message || "No patient found with this LFL code.");
-    } finally {
-      setLookupLoading(false);
-    }
-  };
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    setError("");
-    if (!patientFound?.id)  { setError("Identify the patient first using their LFL code."); return; }
-    if (!form.date)         { setError("Date is required."); return; }
-    if (!form.time)         { setError("Time is required."); return; }
-
-    setSaving(true);
-    createAppointment({
-      patient_id: patientFound.id,
-      date:       form.date,
-      time:       form.time,
-      type:       form.type,
-      location:   form.location || null,
-      notes:      form.notes    || null,
-    })
-      .then((created) => { onCreated(created); onClose(); })
-      .catch((err) => setError(err.message || "Failed to create appointment."))
-      .finally(() => setSaving(false));
-  };
-
-  return (
-    <div className="bg-white border rounded-3xl shadow-sm p-8 mb-8">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-          <Plus size={20} className="text-blue-600" /> New Appointment
-        </h2>
-        <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition">
-          <X size={20} />
-        </button>
-      </div>
-
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Patient LFL lookup — UUID resolved internally */}
-        <div className="sm:col-span-2 space-y-2">
-          <label className="text-xs font-semibold text-slate-500 block">Patient LFL Code *</label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={lflQuery}
-              onChange={(e) => { setLflQuery(e.target.value); setPatientFound(null); setLookupError(""); }}
-              placeholder="LFL-XXXXXX"
-              className="flex-1 border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-400"
-            />
-            <button
-              type="button"
-              onClick={handleLookup}
-              disabled={lookupLoading || !lflQuery.trim()}
-              className="flex items-center gap-1.5 text-xs font-semibold bg-blue-600 text-white px-4 py-2.5 rounded-xl hover:bg-blue-700 transition disabled:opacity-50"
-            >
-              {lookupLoading ? <Loader size={13} className="animate-spin" /> : null}
-              Find
-            </button>
-          </div>
-          {lookupError && (
-            <p className="text-xs text-red-600 flex items-center gap-1">
-              <AlertTriangle size={11} /> {lookupError}
-            </p>
-          )}
-          {patientFound && (
-            <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-xl px-4 py-3">
-              <User size={16} className="text-green-600 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="font-semibold text-slate-800 text-sm">{patientFound.name}</p>
-                <p className="text-xs font-mono text-green-600">{patientFound.patient_code}</p>
-              </div>
-              <CheckCircle size={15} className="text-green-600 shrink-0" />
-            </div>
-          )}
-          <p className="text-xs text-slate-400">
-            The patient must have granted you approved consent before an appointment can be created.
-            The appointment will be sent to the patient for approval.
-          </p>
-        </div>
-
-        <div className="grid sm:grid-cols-2 gap-4">
-
-          <div>
-            <label className="text-xs font-semibold text-slate-500 block mb-1">Date *</label>
-            <input
-              type="date"
-              value={form.date}
-              onChange={set("date")}
-              min={new Date().toISOString().slice(0, 10)}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="text-xs font-semibold text-slate-500 block mb-1">Time *</label>
-            <input
-              type="time"
-              value={form.time}
-              onChange={set("time")}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="text-xs font-semibold text-slate-500 block mb-1">Type</label>
-            <select
-              value={form.type}
-              onChange={set("type")}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
-            >
-              {APPOINTMENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-          </div>
-
-          <div>
-            <label className="text-xs font-semibold text-slate-500 block mb-1">Location</label>
-            <input
-              type="text"
-              value={form.location}
-              onChange={set("location")}
-              placeholder="e.g. Room 204, City Hospital"
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-            />
-          </div>
-
-          <div className="sm:col-span-2">
-            <label className="text-xs font-semibold text-slate-500 block mb-1">Notes</label>
-            <textarea
-              rows={2}
-              value={form.notes}
-              onChange={set("notes")}
-              placeholder="Any instructions or preparation notes for the patient…"
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
-            />
-          </div>
-        </div>
-
-        {error && (
-          <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">
-            <AlertTriangle size={15} className="shrink-0" />
-            {error}
-          </div>
-        )}
-
-        <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-xs text-amber-700">
-          The appointment will be created with status <strong>Pending</strong> and sent to the patient for approval.
-        </div>
-
-        <div className="flex gap-3 pt-2">
-          <button
-            type="submit"
-            disabled={saving || !patientFound?.id}
-            className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-xl font-semibold hover:bg-blue-700 transition disabled:opacity-50 text-sm"
-          >
-            {saving ? <Loader size={15} className="animate-spin" /> : <Plus size={15} />}
-            {saving ? "Creating…" : "Send for Approval"}
-          </button>
-          <button type="button" onClick={onClose} className="text-sm text-slate-600 px-4 py-2.5 rounded-xl hover:bg-slate-100 transition">
-            Cancel
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
 function DoctorAppointmentsPage() {
-  const [all, setAll]         = useState([]);
+  const [all, setAll] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
 
-  const load = useCallback(() => {
-    setLoading(true);
+  useEffect(() => {
     getAppointments()
       .then((data) => setAll(Array.isArray(data) ? data : []))
       .catch(() => setAll([]))
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { load(); }, [load]);
-
+  // Keep joined display fields (patient name) when the API returns a bare row.
   const handleUpdate = (updated) =>
-    setAll((prev) => prev.map((a) => a.id === updated.id ? updated : a));
+    setAll((prev) => prev.map((a) => (a.id === updated.id ? { ...a, ...updated } : a)));
 
-  const handleCreated = (created) => {
-    setAll((prev) => [created, ...prev]);
-  };
-
-  const pending   = all.filter((a) => a.status === "pending");
-  const upcoming  = all.filter((a) => a.status === "upcoming").sort((a, b) => new Date(a.date) - new Date(b.date));
-  const past      = all.filter((a) => a.status === "completed" || a.status === "cancelled" || a.status === "rejected" || new Date(a.date + "T00:00:00") < new Date());
+  const { pending, upcoming, past } = groupAppointments(all);
 
   if (loading) {
     return (
@@ -476,99 +353,40 @@ function DoctorAppointmentsPage() {
     <DoctorLayout>
       <div className="p-10">
 
-        <div className="flex items-start justify-between mb-8 gap-4">
-          <div>
-            <h1 className="text-4xl font-bold text-slate-900 flex items-center gap-3">
-              <CalendarDays size={32} className="text-blue-600" />
-              Appointments
-            </h1>
-            <p className="text-slate-500 mt-2">Manage your patient appointments. New appointments are sent to patients for approval.</p>
-          </div>
-          <button
-            onClick={() => setShowForm((p) => !p)}
-            className="flex items-center gap-2 bg-blue-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-blue-700 transition text-sm shrink-0"
-          >
-            <Plus size={16} />
-            {showForm ? "Hide Form" : "New Appointment"}
-          </button>
+        <div className="mb-8">
+          <h1 className="text-4xl font-bold text-slate-900 flex items-center gap-3">
+            <CalendarDays size={32} className="text-blue-600" />
+            Appointments
+          </h1>
+          <p className="text-slate-500 mt-2">
+            Patients request appointments — confirm them with a date, time and place, or decline.
+          </p>
         </div>
 
-        {showForm && (
-          <CreateAppointmentForm
-            onCreated={handleCreated}
-            onClose={() => setShowForm(false)}
-          />
-        )}
-
-        {/* Stats */}
         <div className="grid grid-cols-3 gap-4 mb-8">
-          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5">
-            <p className="text-amber-700 text-sm font-medium">Pending Approval</p>
-            <p className="text-4xl font-bold text-amber-800 mt-1">{pending.length}</p>
+          <div className={`rounded-2xl p-5 border ${pending.length > 0 ? "bg-amber-50 border-amber-200" : "bg-white shadow-sm"}`}>
+            <p className={`text-sm font-medium ${pending.length > 0 ? "text-amber-700" : "text-slate-500"}`}>New Requests</p>
+            <p className={`text-4xl font-bold mt-1 ${pending.length > 0 ? "text-amber-800" : "text-slate-800"}`}>{pending.length}</p>
           </div>
           <div className="bg-blue-600 text-white rounded-2xl p-5">
             <p className="text-blue-200 text-sm font-medium">Upcoming</p>
             <p className="text-4xl font-bold mt-1">{upcoming.length}</p>
           </div>
           <div className="bg-white border rounded-2xl p-5 shadow-sm">
-            <p className="text-slate-500 text-sm font-medium">Past / Other</p>
+            <p className="text-slate-500 text-sm font-medium">Past &amp; Closed</p>
             <p className="text-4xl font-bold text-slate-800 mt-1">{past.length}</p>
           </div>
         </div>
 
-        {all.length === 0 ? (
-          <div className="bg-white border rounded-3xl p-12 text-center text-slate-400">
-            <CalendarDays size={48} className="mx-auto mb-4 opacity-30" />
-            <h2 className="text-xl font-semibold text-slate-600 mb-2">No appointments yet</h2>
-            <p>Create an appointment for a patient using the button above.</p>
-          </div>
-        ) : (
-          <div className="space-y-10">
-
-            {pending.length > 0 && (
-              <div>
-                <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center gap-2">
-                  <AlertTriangle size={20} className="text-amber-500" />
-                  Pending Patient Approval
-                </h2>
-                <div className="space-y-4">
-                  {pending.map((a) => (
-                    <AppointmentCard key={a.id} appt={a} onUpdate={handleUpdate} onCancel={handleUpdate} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {upcoming.length > 0 && (
-              <div>
-                <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center gap-2">
-                  <CalendarDays size={20} className="text-blue-600" />
-                  Upcoming Appointments
-                </h2>
-                <div className="space-y-4">
-                  {upcoming.map((a) => (
-                    <AppointmentCard key={a.id} appt={a} onUpdate={handleUpdate} onCancel={handleUpdate} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {past.length > 0 && (
-              <div>
-                <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center gap-2">
-                  <CheckCircle size={20} className="text-green-600" />
-                  Past &amp; Resolved
-                </h2>
-                <div className="space-y-4">
-                  {past.map((a) => (
-                    <AppointmentCard key={a.id} appt={a} onUpdate={handleUpdate} onCancel={handleUpdate} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-          </div>
-        )}
+        <div className="space-y-10">
+          <Section icon={Inbox} color="text-amber-500" title="Appointment Requests" items={pending} onUpdate={handleUpdate}
+            empty="No new requests. Patients can request appointments from their portal." />
+          <Section icon={CalendarDays} color="text-blue-600" title="Upcoming Appointments" items={upcoming} onUpdate={handleUpdate}
+            empty="No confirmed appointments coming up." />
+          {past.length > 0 && (
+            <Section icon={CheckCircle} color="text-green-600" title="Past & Closed" items={past} onUpdate={handleUpdate} />
+          )}
+        </div>
 
       </div>
     </DoctorLayout>

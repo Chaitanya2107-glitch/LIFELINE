@@ -72,3 +72,9 @@ class PatientProfileUpdate(BaseModel):
     conditions: list[Any] | None = None
 
 
+class EmergencyQrResponse(BaseModel):
+    """Returned by GET /patient/emergency-qr and POST /patient/emergency-qr/regenerate."""
+    token: str
+    url: str
+
+

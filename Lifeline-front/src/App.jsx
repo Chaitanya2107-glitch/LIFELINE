@@ -42,6 +42,15 @@ import CarePlanPage from "./pages/patient/CarePlanPage";
 import VisitBriefPage from "./pages/patient/VisitBriefPage";
 import AppointmentsPage from "./pages/patient/AppointmentsPage";
 import EmergencyProfilePage from "./pages/patient/EmergencyProfilePage";
+import EmergencyPublicPage from "./pages/public/EmergencyPublicPage";
+
+// Pharmacy Portal
+import PharmacyLoginPage from "./pages/pharmacy/PharmacyLoginPage";
+import PharmacyRegisterPage from "./pages/pharmacy/PharmacyRegisterPage";
+import PharmacyDashboard from "./pages/pharmacy/PharmacyDashboard";
+import PharmacyAccessRequestsPage from "./pages/pharmacy/PharmacyAccessRequestsPage";
+import PharmacyPrescriptionsPage from "./pages/pharmacy/PharmacyPrescriptionsPage";
+import PharmacyHistoryPage from "./pages/pharmacy/PharmacyHistoryPage";
 
 function patientRoute(path, Element) {
   return (
@@ -69,6 +78,19 @@ function doctorRoute(path, Element) {
   );
 }
 
+function pharmacistRoute(path, Element) {
+  return (
+    <Route
+      path={path}
+      element={
+        <ProtectedRoute requiredRole="PHARMACIST" redirectTo="/pharmacy/login">
+          <Element />
+        </ProtectedRoute>
+      }
+    />
+  );
+}
+
 function AppRoutes() {
   return (
     <>
@@ -78,6 +100,7 @@ function AppRoutes() {
         {/* ── Public ───────────────────────────────────────────── */}
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
+        <Route path="/emergency/:token" element={<EmergencyPublicPage />} />
 
         {/* ── Doctor Portal ─────────────────────────────────────── */}
         <Route path="/doctor/login" element={<DoctorLoginPage />} />
@@ -111,6 +134,14 @@ function AppRoutes() {
         {patientRoute("/patient/visit-brief", VisitBriefPage)}
         {patientRoute("/patient/appointments", AppointmentsPage)}
         {patientRoute("/patient/emergency", EmergencyProfilePage)}
+
+        {/* ── Pharmacy Portal ───────────────────────────────────── */}
+        <Route path="/pharmacy/login" element={<PharmacyLoginPage />} />
+        <Route path="/pharmacy/register" element={<PharmacyRegisterPage />} />
+        {pharmacistRoute("/pharmacy/dashboard", PharmacyDashboard)}
+        {pharmacistRoute("/pharmacy/access-requests", PharmacyAccessRequestsPage)}
+        {pharmacistRoute("/pharmacy/prescriptions", PharmacyPrescriptionsPage)}
+        {pharmacistRoute("/pharmacy/history", PharmacyHistoryPage)}
 
         {/* ── Legacy redirects ──────────────────────────────────── */}
         <Route path="/dashboard" element={<Navigate to="/" replace />} />

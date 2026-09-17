@@ -2,35 +2,80 @@
 
 Route declaration order (literals before parameterised):
 
-  GET    /appointments               -- patient: own; doctor: own
-  POST   /appointments               -- doctor only (requires consent); status='pending'
-  PATCH  /appointments/{id}          -- update status/notes/location (owner only, role-scoped)
-  DELETE /appointments/{id}          -- cancel (sets status='cancelled', owner only)
+  GET    /appointments/doctors      -- patient: doctors available to book with
+  GET    /appointments              -- patient: own; doctor: own
+  POST   /appointments              -- patient only; requests an appointment (status='pending')
+  PATCH  /appointments/{id}         -- doctor approves/declines/completes/edits; patient cancels
+  DELETE /appointments/{id}         -- cancel (sets status='cancelled', owner only)
 
-Approval flow (replaces OTP):
-  1. Doctor calls POST /appointments  -> appointment created with status='pending'
-  2. Patient calls PATCH /appointments/{id} with status='upcoming' to approve,
-     or status='rejected' to decline.
-  3. Doctor may mark 'completed' or 'cancelled' on their own appointments.
+Request flow (patient asks, doctor confirms):
+  1. Patient calls POST /appointments with a doctor, preferred date/time and reason.
+  2. Doctor calls PATCH /appointments/{id} with status='upcoming' plus the
+     confirmed date, time and location — or status='rejected' to decline.
+  3. Patient sees the confirmed appointment in GET /appointments.
+  4. Doctor may later mark it 'completed'; either side may cancel.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.appointments import service as appt_service
 from app.appointments.schemas import (
     Appointment,
     CreateAppointmentBody,
+    DoctorOption,
     UpdateAppointmentBody,
 )
 from app.auth.security import (
     get_current_user,
+    require_patient,
 )
-from app.services.medical_record_service import check_doctor_consent
+from app.utils.limiter import limiter
 
 appointments_router = APIRouter(
     prefix="/appointments",
     tags=["Appointments"],
 )
+
+_ERRORS = {
+    "not_found": (404, "Appointment not found"),
+    "forbidden": (403, "Access denied"),
+    "forbidden_transition": (403, "You are not allowed to make this change"),
+    "invalid_transition": (409, "This change is not allowed for the current appointment state"),
+    "missing_schedule": (422, "Date, time and location are required to confirm an appointment"),
+    "doctor_not_found": (404, "Doctor not found"),
+    "duplicate_pending": (409, "You already have a pending request with this doctor"),
+}
+
+
+def _raise_if_error(result):
+    if isinstance(result, str):
+        status_code, detail = _ERRORS[result]
+        raise HTTPException(status_code=status_code, detail=detail)
+    return result
+
+
+def _owner_id(current_user: dict):
+    """Return (role, owner id) for patient/doctor tokens; 403 for anyone else."""
+    role = current_user.get("role")
+    if role == "patient":
+        return role, current_user["patient_id"]
+    if role == "doctor":
+        return role, current_user["user_id"]
+    raise HTTPException(status_code=403, detail="Access denied")
+
+
+# ── GET /appointments/doctors ──────────────────────────────────────────────────
+
+@appointments_router.get("/doctors", response_model=list[DoctorOption])
+def list_doctors(
+    current_user: dict = Depends(require_patient),
+):
+    """List doctors the patient can request an appointment with.
+
+    Accessible by: patient only. Returns id, name and specialization only.
+    """
+    return appt_service.list_doctors()
+
 
 # ── GET /appointments ──────────────────────────────────────────────────────────
 
@@ -40,69 +85,38 @@ def get_appointments(
 ):
     """Return appointments for the authenticated caller.
 
-    - Patient token: returns all appointments where patient_id matches JWT.
-    - Doctor token:  returns all appointments where doctor_id matches JWT.
-    - Clerk token:   403.
-
-    Note: doctor GET is NOT consent-gated — a doctor sees their own
-    appointment schedule regardless of patient consent status.
+    - Patient token: all appointments where patient_id matches JWT.
+    - Doctor token:  all appointments where doctor_id matches JWT
+      (incoming requests included).
+    - Anyone else:   403.
     """
-    role = current_user.get("role")
-
+    role, owner_id = _owner_id(current_user)
     if role == "patient":
-        return appt_service.get_appointments(
-            role="patient",
-            user_id=None,
-            patient_id=current_user["patient_id"],
-        )
-
-    if role == "doctor":
-        return appt_service.get_appointments(
-            role="doctor",
-            user_id=current_user["user_id"],
-        )
-
-    raise HTTPException(status_code=403, detail="Access denied")
+        return appt_service.get_appointments(role="patient", user_id=None, patient_id=owner_id)
+    return appt_service.get_appointments(role="doctor", user_id=owner_id)
 
 
 # ── POST /appointments ─────────────────────────────────────────────────────────
 
 @appointments_router.post("", response_model=Appointment, status_code=201)
+@limiter.limit("10/minute")
 def create_appointment(
+    request: Request,
     body: CreateAppointmentBody,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_patient),
 ):
-    """Doctor proposes an appointment for a patient.
+    """Patient requests an appointment with a doctor.
 
-    Accessible by: doctor only.
-    Requires:
-      1. A valid doctor JWT.
-      2. An approved, unexpired consent for the target patient.
-
-    The appointment is created with status='pending'.  The patient must
-    approve it (PATCH /appointments/{id} status='upcoming') before it
-    is confirmed.  No OTP round-trip is required.
+    Accessible by: patient only.
+    Created with status='pending'. The doctor confirms the final date,
+    time and location (PATCH status='upcoming') or declines it.
+    409 if the patient already has a pending request with this doctor.
     """
-    role = current_user.get("role")
-
-    if role != "doctor":
-        raise HTTPException(
-            status_code=403,
-            detail="Only doctors can create appointments",
-        )
-
-    doctor_id = current_user["user_id"]
-
-    if not check_doctor_consent(doctor_id, body.patient_id):
-        raise HTTPException(
-            status_code=403,
-            detail="No approved consent found for this patient",
-        )
-
-    return appt_service.create_appointment(
-        doctor_id=doctor_id,
+    result = appt_service.create_appointment(
+        patient_id=current_user["patient_id"],
         data=body.model_dump(),
     )
+    return _raise_if_error(result)
 
 
 # ── PATCH /appointments/{id} ───────────────────────────────────────────────────
@@ -113,62 +127,25 @@ def update_appointment(
     body: UpdateAppointmentBody,
     current_user: dict = Depends(get_current_user),
 ):
-    """Update status, notes, and/or location on an appointment.
+    """Update an appointment.
 
-    Role-based status transition rules:
-      - Patient: may set status to 'upcoming' (approve) or 'rejected' only when
-                 current status is 'pending'.  May also set 'cancelled'.
-      - Doctor:  may set status to 'completed' or 'cancelled'.
-                 Cannot move 'pending' -> 'upcoming' (that is the patient's action).
-      - Clerk:   403.
+    - Doctor:  approve a request (status='upcoming' with date, time, location),
+               decline it (status='rejected', optional notes as the reason),
+               mark 'completed', cancel, or edit date/time/location/notes.
+    - Patient: may only cancel (status='cancelled').
+    - Others:  403.
 
     Ownership is always enforced: patient must own patient_id, doctor must own doctor_id.
     """
-    role = current_user.get("role")
-
-    if role == "clerk":
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    if role not in {"patient", "doctor"}:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    user_id = (
-        current_user["patient_id"] if role == "patient"
-        else current_user["user_id"]
-    )
-
-    # Enforce role-based status transition rules before hitting the service.
-    requested_status = body.status
-    if requested_status is not None:
-        if role == "doctor" and requested_status in {"upcoming", "rejected"}:
-            raise HTTPException(
-                status_code=403,
-                detail="Doctors cannot approve or reject appointments — that is the patient's action",
-            )
-        if role == "patient" and requested_status in {"completed"}:
-            raise HTTPException(
-                status_code=403,
-                detail="Patients cannot mark appointments as completed",
-            )
+    role, owner_id = _owner_id(current_user)
 
     result = appt_service.update_appointment(
         appt_id=appt_id,
         role=role,
-        user_id=user_id,
+        user_id=owner_id,
         payload=body.model_dump(exclude_unset=True),
     )
-
-    if result == "not_found":
-        raise HTTPException(status_code=404, detail="Appointment not found")
-    if result == "forbidden":
-        raise HTTPException(status_code=403, detail="Access denied")
-    if result == "invalid_transition":
-        raise HTTPException(
-            status_code=409,
-            detail="This status change is not allowed for the current appointment state",
-        )
-
-    return result
+    return _raise_if_error(result)
 
 
 # ── DELETE /appointments/{id} ──────────────────────────────────────────────────
@@ -178,34 +155,17 @@ def cancel_appointment(
     appt_id: str,
     current_user: dict = Depends(get_current_user),
 ):
-    """Cancel an appointment (sets status to 'cancelled').
+    """Cancel a pending or upcoming appointment (sets status to 'cancelled').
 
     - Patient token: must own the appointment.
     - Doctor token:  must own the appointment.
-    - Clerk token:   403.
+    - Others:        403.
     """
-    role = current_user.get("role")
-
-    if role == "clerk":
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    if role not in {"patient", "doctor"}:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    user_id = (
-        current_user["patient_id"] if role == "patient"
-        else current_user["user_id"]
-    )
+    role, owner_id = _owner_id(current_user)
 
     result = appt_service.cancel_appointment(
         appt_id=appt_id,
         role=role,
-        user_id=user_id,
+        user_id=owner_id,
     )
-
-    if result == "not_found":
-        raise HTTPException(status_code=404, detail="Appointment not found")
-    if result == "forbidden":
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    return result
+    return _raise_if_error(result)

@@ -10,6 +10,10 @@ class ConsentRequestResponse(BaseModel):
     requested_at: str
     responded_at: str | None
     expires_at: str | None
+    # Populated on GET /consent/pending only (who is asking for access).
+    requester_name: str | None = None
+    requester_role: str | None = None
+    requester_specialization: str | None = None
 
 
 class RequestConsentBody(BaseModel):

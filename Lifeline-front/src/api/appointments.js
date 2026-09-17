@@ -1,39 +1,52 @@
 /**
  * src/api/appointments.js
- * Appointments API calls — doctor and patient sides.
+ * Appointments API calls — patient requests, doctor confirms.
+ *
+ * Status flow:
+ *   pending   — patient requested, waiting for the doctor
+ *   upcoming  — doctor confirmed date / time / location
+ *   rejected  — doctor declined (notes may hold the reason)
+ *   completed — doctor marked the visit done
+ *   cancelled — either side cancelled
  */
 
 import { api } from "./client.js";
 
 /**
  * GET /appointments
- * Returns appointments for the authenticated user (doctor or patient).
- * @returns {object[]} array of appointment objects
+ * Appointments for the authenticated user (doctor or patient), with
+ * doctor_name / doctor_specialization / patient_name / patient_code joined in.
+ * @returns {object[]}
  */
 export function getAppointments() {
   return api.get("/appointments");
 }
 
 /**
- * POST /appointments
- * Doctor creates a pending appointment for a patient (requires consent).
- * The appointment is created with status='pending' — the patient must approve it.
- * @param {object} data  - { patient_id, date, time, type, location?, notes? }
- * @returns {object} created appointment (status='pending')
+ * GET /appointments/doctors  (patient only)
+ * @returns {{ id: number, name: string, specialization: string|null }[]}
  */
-export function createAppointment(data) {
+export function getBookableDoctors() {
+  return api.get("/appointments/doctors");
+}
+
+/**
+ * POST /appointments  (patient only)
+ * Patient requests an appointment; created with status='pending'.
+ * @param {object} data  - { doctor_id, date, time, type, reason? }
+ *                         date/time are the patient's preferred slot.
+ * @returns {object} created appointment
+ */
+export function requestAppointment(data) {
   return api.post("/appointments", data);
 }
 
 /**
  * PATCH /appointments/{id}
- * Update status, notes, or location of an appointment.
- *
- * Doctor may set: 'completed', 'cancelled'
- * Patient may set: 'upcoming' (approve), 'rejected', 'cancelled'
- *
- * @param {string} id    - appointment UUID
- * @param {object} data  - { status?, notes?, location? }
+ * Doctor: edit date / time / location / notes, or change status.
+ * Patient: may only set status='cancelled'.
+ * @param {string} id
+ * @param {object} data  - { status?, date?, time?, location?, notes? }
  * @returns {object} updated appointment
  */
 export function updateAppointment(id, data) {
@@ -41,28 +54,32 @@ export function updateAppointment(id, data) {
 }
 
 /**
- * Patient approves a pending appointment (sets status='upcoming').
- * Shorthand around updateAppointment for clarity at the call site.
- * @param {string} id  - appointment UUID
- * @returns {object} updated appointment with status='upcoming'
+ * Doctor confirms a request with the final schedule (status='upcoming').
+ * @param {string} id
+ * @param {{ date: string, time: string, location: string, notes?: string }} schedule
  */
-export function approveAppointment(id) {
-  return api.patch(`/appointments/${encodeURIComponent(id)}`, { status: "upcoming" });
+export function approveAppointment(id, schedule) {
+  return updateAppointment(id, { ...schedule, status: "upcoming" });
 }
 
 /**
- * Patient rejects a pending appointment (sets status='rejected').
- * @param {string} id  - appointment UUID
- * @returns {object} updated appointment with status='rejected'
+ * Doctor declines a request (status='rejected').
+ * @param {string} id
+ * @param {string} [reason]  - shown to the patient
  */
-export function rejectAppointment(id) {
-  return api.patch(`/appointments/${encodeURIComponent(id)}`, { status: "rejected" });
+export function rejectAppointment(id, reason) {
+  return updateAppointment(id, { status: "rejected", ...(reason ? { notes: reason } : {}) });
+}
+
+/** Doctor marks a confirmed appointment as done (status='completed'). */
+export function completeAppointment(id) {
+  return updateAppointment(id, { status: "completed" });
 }
 
 /**
  * DELETE /appointments/{id}
- * Cancel an appointment (sets status to 'cancelled', ownership enforced by backend).
- * @param {string} id  - appointment UUID
+ * Cancel a pending or upcoming appointment (ownership enforced by backend).
+ * @param {string} id
  * @returns {object} updated appointment with status='cancelled'
  */
 export function cancelAppointment(id) {

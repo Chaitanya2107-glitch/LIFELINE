@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     CONSENT_ACCESS_DURATION_DAYS: int = 7
 
     # =========================
+    # Frontend
+    # =========================
+    # Base URL of the Lifeline frontend — used when building QR code URLs.
+    # Override via FRONTEND_BASE_URL in .env for production deployments.
+    FRONTEND_BASE_URL: str = "http://localhost:5173"
+
+    # =========================
     # Logging
     # =========================
     LOG_LEVEL: str = "INFO"
