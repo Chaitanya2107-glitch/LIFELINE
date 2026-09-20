@@ -1,7 +1,5 @@
-import base64
-import requests
-
 from app.config.settings import settings
+from app.utils.logger import logger
 
 
 VISION_URL = (
@@ -11,8 +9,17 @@ VISION_URL = (
 
 def extract_text(file_path: str) -> str:
     """
-    Extract text using Google Vision OCR API.
+    Extract text using Google Vision OCR API if key is present,
+    otherwise fallback to EasyOCR.
     """
+    if not settings.GOOGLE_VISION_API_KEY:
+        logger.info("GOOGLE_VISION_API_KEY not configured — using EasyOCR fallback engine")
+        from app.ai.easyocr_engine import extract_text as easyocr_extract
+        text, _ = easyocr_extract(file_path)
+        return text
+
+    import base64
+    import requests
 
     with open(file_path, "rb") as image_file:
         image_bytes = image_file.read()

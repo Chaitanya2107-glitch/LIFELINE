@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     APP_NAME: str = "Lifeline Backend"
     ENVIRONMENT: str = "development"
-    GOOGLE_VISION_API_KEY: str
+    GOOGLE_VISION_API_KEY: Optional[str] = None
     # =========================
     # Supabase
     # =========================

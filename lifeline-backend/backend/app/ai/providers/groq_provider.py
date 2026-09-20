@@ -5,7 +5,16 @@ from groq import Groq
 from app.config.settings import settings
 from app.utils.logger import logger
 
-client = Groq(api_key=settings.GROQ_API_KEY)
+_client: Groq | None = None
+
+
+def get_client() -> Groq:
+    global _client
+    if _client is None:
+        if not settings.GROQ_API_KEY:
+            raise ValueError("GROQ_API_KEY is not configured in environment or .env")
+        _client = Groq(api_key=settings.GROQ_API_KEY)
+    return _client
 
 
 def generate(prompt: str) -> str:
@@ -22,7 +31,7 @@ def generate(prompt: str) -> str:
                 settings.GROQ_MODEL,
             )
 
-            response = client.chat.completions.create(
+            response = get_client().chat.completions.create(
                 model=settings.GROQ_MODEL,
                 messages=[
                     {

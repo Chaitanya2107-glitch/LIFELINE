@@ -653,11 +653,11 @@ CONSENT_ACCESS_DURATION_DAYS=7
 FRONTEND_BASE_URL=http://localhost:5173   # used to build QR URLs — not yet in .env.example
 LOG_LEVEL=INFO
 AI_PROVIDER=groq
-GROQ_API_KEY=                       # required for AI features
+GROQ_API_KEY=                       # required for AI features (client created lazily; clear error if missing)
 GROQ_MODEL=openai/gpt-oss-20b
 GEMINI_API_KEY=                     # optional, inactive
 OPENROUTER_API_KEY=                 # optional, inactive
-GOOGLE_VISION_API_KEY=              # ⚠ declared as required str but unused — should be Optional
+GOOGLE_VISION_API_KEY=              # optional; vision_engine falls back to EasyOCR when unset
 ```
 
 Frontend `.env.local` (not committed):
@@ -739,7 +739,6 @@ No scope defined. **Plan → approval → validation → implementation.**
 | Medical registry validation | `med_reg_no` is accepted without checking a registry |
 | Add `FRONTEND_BASE_URL` to `.env.example` | Needed for correct QR URLs in production |
 | Add production frontend URL to CORS | `allow_origins` in `app/main.py` |
-| Make `GOOGLE_VISION_API_KEY` Optional | Currently a required `str` though unused |
 | Remove `PATIENT_JWT_EXPIRE_MINUTES` | Unused since OTP removal |
 | Drop `otp_sessions` table | Unused since OTP removal — needs explicit approval |
 | Retire `reports` table | Orphaned |
